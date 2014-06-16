@@ -30,9 +30,9 @@ module Data.SBV.BitVectors.Data
  , SBV(..), NodeId(..), mkSymSBV
  , ArrayContext(..), ArrayInfo, SymArray(..), SFunArray(..), mkSFunArray, SArray(..), arrayUIKind
  , sbvToSW, sbvToSymSW, forceSWArg
- , SBVExpr(..), newExpr
+ , SBVExpr(..), newExpr, newSW
  , cache, Cached, uncache, uncacheAI, HasKind(..)
- , Op(..), NamedSymVar, UnintKind(..), getTableIndex, SBVPgm(..), Symbolic, runSymbolic, runSymbolic', State, getPathCondition, extendPathCondition
+ , Op(..), NamedSymVar, UnintKind(..), getTableIndex, SBVPgm(..), Symbolic, runSymbolic, runSymbolic', State(..), getPathCondition, extendPathCondition
  , inProofMode, SBVRunMode(..), Kind(..), Outputtable(..), Result(..)
  , Logic(..), SMTLibLogic(..)
  , getTraceInfo, getConstraints, addConstraint
@@ -238,6 +238,8 @@ data Op = Plus | Times | Minus
         | ArrEq   Int Int
         | ArrRead Int
         | Uninterpreted String
+        | SQuot | SRem | SGreaterThan | SLessThan | SLessEq | SGreaterEq
+        | SymShr | SymShl | SSymShr
         deriving (Eq, Ord)
 
 -- | SMT-Lib's square-root over floats/doubles. We piggy back on to the uninterpreted function mechanism
@@ -541,7 +543,7 @@ unintFnUIKind (s, t) = (s, UFun (typeArity t) s)
 
 -- | Convert an array value type to the kind-of uninterpreted value it represents
 arrayUIKind :: (Int, ArrayInfo) -> Maybe (String, UnintKind)
-arrayUIKind (i, (nm, _, ctx)) 
+arrayUIKind (i, (nm, _, ctx))
   | external ctx = Just ("array_" ++ show i, UArr 1 nm) -- arrays are always 1-dimensional in the SMT-land. (Unless encoded explicitly)
   | True         = Nothing
   where external (ArrayFree{})   = True
@@ -1068,7 +1070,7 @@ instance (Random a, SymWord a) => Random (SBV a) where
 -- An @array a b@ is an array indexed by the type @'SBV' a@, with elements of type @'SBV' b@
 -- If an initial value is not provided in 'newArray_' and 'newArray' methods, then the elements
 -- are left unspecified, i.e., the solver is free to choose any value. This is the right thing
--- to do if arrays are used as inputs to functions to be verified, typically. 
+-- to do if arrays are used as inputs to functions to be verified, typically.
 --
 -- While it's certainly possible for user to create instances of 'SymArray', the
 -- 'SArray' and 'SFunArray' instances already provided should cover most use cases
@@ -1302,8 +1304,8 @@ data SMTLibLogic
   | AUFLIRA   -- ^ Linear formulas with free sort and function symbols over one- and two-dimentional arrays of integer index and real value
   | AUFNIRA   -- ^ Formulas with free function and predicate symbols over a theory of arrays of arrays of integer index and real value
   | LRA       -- ^ Linear formulas in linear real arithmetic
-  | UFLRA     -- ^ Linear real arithmetic with uninterpreted sort and function symbols. 
-  | UFNIA     -- ^ Non-linear integer arithmetic with uninterpreted sort and function symbols. 
+  | UFLRA     -- ^ Linear real arithmetic with uninterpreted sort and function symbols.
+  | UFNIA     -- ^ Non-linear integer arithmetic with uninterpreted sort and function symbols.
   | QF_ABV    -- ^ Quantifier-free formulas over the theory of bitvectors and bitvector arrays
   | QF_AUFBV  -- ^ Quantifier-free formulas over the theory of bitvectors and bitvector arrays extended with free sort and function symbols
   | QF_AUFLIA -- ^ Quantifier-free linear formulas over the theory of integer arrays extended with free sort and function symbols
@@ -1311,16 +1313,16 @@ data SMTLibLogic
   | QF_BV     -- ^ Quantifier-free formulas over the theory of fixed-size bitvectors
   | QF_IDL    -- ^ Difference Logic over the integers. Boolean combinations of inequations of the form x - y < b where x and y are integer variables and b is an integer constant
   | QF_LIA    -- ^ Unquantified linear integer arithmetic. In essence, Boolean combinations of inequations between linear polynomials over integer variables
-  | QF_LRA    -- ^ Unquantified linear real arithmetic. In essence, Boolean combinations of inequations between linear polynomials over real variables. 
-  | QF_NIA    -- ^ Quantifier-free integer arithmetic. 
-  | QF_NRA    -- ^ Quantifier-free real arithmetic. 
-  | QF_RDL    -- ^ Difference Logic over the reals. In essence, Boolean combinations of inequations of the form x - y < b where x and y are real variables and b is a rational constant. 
-  | QF_UF     -- ^ Unquantified formulas built over a signature of uninterpreted (i.e., free) sort and function symbols. 
-  | QF_UFBV   -- ^ Unquantified formulas over bitvectors with uninterpreted sort function and symbols. 
-  | QF_UFIDL  -- ^ Difference Logic over the integers (in essence) but with uninterpreted sort and function symbols. 
-  | QF_UFLIA  -- ^ Unquantified linear integer arithmetic with uninterpreted sort and function symbols. 
-  | QF_UFLRA  -- ^ Unquantified linear real arithmetic with uninterpreted sort and function symbols. 
-  | QF_UFNRA  -- ^ Unquantified non-linear real arithmetic with uninterpreted sort and function symbols. 
+  | QF_LRA    -- ^ Unquantified linear real arithmetic. In essence, Boolean combinations of inequations between linear polynomials over real variables.
+  | QF_NIA    -- ^ Quantifier-free integer arithmetic.
+  | QF_NRA    -- ^ Quantifier-free real arithmetic.
+  | QF_RDL    -- ^ Difference Logic over the reals. In essence, Boolean combinations of inequations of the form x - y < b where x and y are real variables and b is a rational constant.
+  | QF_UF     -- ^ Unquantified formulas built over a signature of uninterpreted (i.e., free) sort and function symbols.
+  | QF_UFBV   -- ^ Unquantified formulas over bitvectors with uninterpreted sort function and symbols.
+  | QF_UFIDL  -- ^ Difference Logic over the integers (in essence) but with uninterpreted sort and function symbols.
+  | QF_UFLIA  -- ^ Unquantified linear integer arithmetic with uninterpreted sort and function symbols.
+  | QF_UFLRA  -- ^ Unquantified linear real arithmetic with uninterpreted sort and function symbols.
+  | QF_UFNRA  -- ^ Unquantified non-linear real arithmetic with uninterpreted sort and function symbols.
   | QF_FPABV  -- ^ Quantifier-free formulas over the theory of floating point numbers, arrays, and bit-vectors
   | QF_FPA    -- ^ Quantifier-free formulas over the theory of floating point numbers
   deriving Show

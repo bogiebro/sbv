@@ -435,6 +435,9 @@ cvtExp rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                                , (XOr,  lift2B "xor" "bvxor")
                                , (Not,  lift1B "not" "bvnot")
                                , (Join, lift2 "concat")
+                               , (SymShr, lift2 "bvlshr")
+                               , (SymShl, lift2 "bvshl")
+                               , (SSymShr, lift2 "bvashr")
                                ]
         sh inp@(SBVApp op args)
           | intOp, Just f <- lookup op smtOpIntTable
@@ -453,13 +456,18 @@ cvtExp rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                                 , (Minus,         lift2   "bvsub")
                                 , (Times,         lift2   "bvmul")
                                 , (Quot,          lift2S  "bvudiv" "bvsdiv")
+                                , (SQuot,         lift2   "bvsdiv")
                                 , (Rem,           lift2S  "bvurem" "bvsrem")
+                                , (SRem,          lift2   "bvsrem")
                                 , (Equal,         eqBV)
                                 , (NotEqual,      neqBV)
                                 , (LessThan,      lift2S  "bvult" "bvslt")
+                                , (SLessThan,     lift2   "bvslt")
                                 , (GreaterThan,   lift2S  "bvugt" "bvsgt")
+                                , (SGreaterThan,  lift2   "bvsgt")
                                 , (LessEq,        lift2S  "bvule" "bvsle")
-                                , (GreaterEq,     lift2S  "bvuge" "bvsge")
+                                , (SLessEq,       lift2   "bvsle")
+                                , (SGreaterEq,    lift2   "bvsge")
                                 ]
                 smtOpRealTable =  smtIntRealShared
                                ++ [ (Quot,        lift2WM "/")

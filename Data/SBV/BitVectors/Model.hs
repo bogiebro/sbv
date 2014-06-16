@@ -19,6 +19,7 @@
 {-# LANGUAGE MultiParamTypeClasses  #-}
 {-# LANGUAGE ScopedTypeVariables    #-}
 {-# LANGUAGE Rank2Types             #-}
+{-# LANGUAGE ViewPatterns           #-}
 
 module Data.SBV.BitVectors.Model (
     Mergeable(..), EqSymbolic(..), OrdSymbolic(..), SDivisible(..), Uninterpreted(..), SIntegral
@@ -28,11 +29,21 @@ module Data.SBV.BitVectors.Model (
   , constrain, pConstrain, sBool, sBools, sWord8, sWord8s, sWord16, sWord16s, sWord32
   , sWord32s, sWord64, sWord64s, sInt8, sInt8s, sInt16, sInt16s, sInt32, sInt32s, sInt64
   , sInt64s, sInteger, sIntegers, sReal, sReals, toSReal, sFloat, sFloats, sDouble, sDoubles, slet
-  , fusedMA
-  )
-  where
+  , fusedMA,
 
-import Control.Monad   (when, liftM)
+  SWord, symBitVector, bitVector,
+  bvEq, bvNeq, bvAdd, bvSub, 
+  bvMul, bvLt, bvLe, bvGt, bvGe, 
+  bvSLt, bvSLe, bvSGt, bvSGe,
+  bvAnd, bvOr, bvXOr, bvNot,
+  bvShL, bvShR, bvSShR,
+  bvUDiv, bvURem, bvSDiv, bvSRem
+  ) where
+
+-- import Control.Monad   (when, liftM)
+-- import Control.Monad.Trans (liftIO)
+import Data.IORef
+import Control.Monad.Reader
 
 import Data.Array      (Array, Ix, listArray, elems, bounds, rangeSize)
 import Data.Bits       (Bits(..))
@@ -1746,6 +1757,228 @@ slet x f = SBV k $ Right $ cache r
 -- We use 'isVacuous' and 'prove' only for the "test" section in this file, and GHC complains about that. So, this shuts it up.
 __unused :: a
 __unused = error "__unused" (isVacuous :: SBool -> IO Bool) (prove :: SBool -> IO ThmResult)
+
+
+data BitVector
+type SWord = SBV BitVector
+
+maxPositiveBound :: Int -> Integer
+maxPositiveBound w = 2 ^ w - 1
+
+maxNegativeBound :: Int -> Integer 
+maxNegativeBound w = 2 ^ (w-1) - 1
+
+minNegativeBound :: Int -> Integer 
+minNegativeBound w = negate (2 ^ (w-1))
+
+signedRep :: Int -> Integer -> Integer
+signedRep w x
+  | w > 0 && testBit x (w - 1) = x - bit w
+  | otherwise                  = x
+
+symBitVector :: Int -> Quantifier -> Symbolic SWord
+symBitVector w q = do
+  st <- ask
+  (sw, nm) <- liftIO $ newSW st (KBounded False w)
+  liftIO $ modifyIORef (rinps st) ((q, (sw, nm)):)
+  return $ SBV (KBounded False w) $ Right $ cache (const (return sw))
+
+bitVector :: Int -> Integer -> SWord
+bitVector w v = SBV k $ Left $ mkConstCW k v where
+  k = KBounded False w
+
+noCheck :: a -> b -> Bool
+noCheck _ _ = True
+ 
+valIs :: SWord -> (Integer -> Bool) -> Bool
+valIs (SBV _ (Left (cwVal -> CWInteger c))) f = f c
+valIs _ _ = False
+
+cwIs :: SWord -> ((Int, Integer) -> Bool) -> Bool
+cwIs (SBV (KBounded _ w) (Left (cwVal -> CWInteger c))) f = f (w,c)
+cwIs _ _ = False
+
+addArgs :: t1 -> ((t2 -> t3) -> t1 -> (t4 -> t5) -> (t6 -> t7) -> t) -> t
+addArgs op f = f badArg op badArg badArg where
+  badArg _ = error "should be an integral value"
+
+bvEq :: SWord -> SWord -> SBool
+bvEq = addArgs (==) $ liftSym2B (mkSymOpSC (eqOpt trueSW) Equal) noCheck
+
+bvNeq :: SWord -> SWord -> SBool
+bvNeq = addArgs (/=) $ liftSym2B (mkSymOpSC (eqOpt falseSW) NotEqual) noCheck
+
+bvAdd :: SWord -> SWord -> SWord
+bvAdd x y
+  | x `valIs` (== 0) = y  
+  | y `valIs` (== 0) = x  
+  | True = addArgs (+) (liftSym2 (mkSymOp Plus) noCheck) x y
+
+bvSub :: SWord -> SWord -> SWord
+bvSub x y
+    | y `valIs` (== 0) = x
+    | True = addArgs (-) (liftSym2 (mkSymOp Minus) noCheck) x y
+
+bvMul :: SWord -> SWord -> SWord
+bvMul x y
+  | x `valIs` (== 0) = x
+  | y `valIs` (== 0) = y
+  | x `valIs` (== 1) = y
+  | y `valIs` (== 1) = x
+  | True = addArgs (*) (liftSym2 (mkSymOp Times) noCheck) x y
+
+bvLt :: SWord -> SWord -> SBool
+bvLt x y
+  | x `cwIs` (\(k,c)-> maxPositiveBound k == c) = false
+  | y `cwIs` (\(_,c)-> 0 == c) = false
+  | True = addArgs (<) (liftSym2B (mkSymOpSC (eqOpt falseSW) LessThan) noCheck) x y
+
+bvLe :: SWord -> SWord -> SBool
+bvLe x y
+  | y `cwIs` (\(k,c)-> maxPositiveBound k == c) = true
+  | x `cwIs` (\(_,c)-> 0 == c) = true
+  | True = addArgs (<=) (liftSym2B (mkSymOpSC (eqOpt trueSW) LessEq) noCheck) x y
+
+bvGt :: SWord -> SWord -> SBool
+bvGt x y
+  | y `cwIs` (\(k,c)-> maxPositiveBound k == c) = false
+  | x `cwIs` (\(_,c)-> 0 == c) = false
+  | True = addArgs (>) (liftSym2B (mkSymOpSC (eqOpt falseSW) GreaterThan) noCheck) x y
+
+bvGe :: SWord -> SWord -> SBool
+bvGe x y
+  | x `cwIs` (\(k, c)-> maxPositiveBound k == c) = true
+  | y `cwIs` (\(_, c)-> 0 == c) = true
+  | True = addArgs (>=) (liftSym2B (mkSymOpSC (eqOpt trueSW) GreaterEq) noCheck) x y
+
+bvSLt :: SWord -> SWord -> SBool
+bvSLt x y
+  | x `cwIs` (\(k,c)-> maxNegativeBound k == signedRep k c) = false
+  | y `cwIs` (\(k,c)-> minNegativeBound k == signedRep k c) = false
+  | True = addArgs (<) (liftSym2B (mkSymOpSC (eqOpt falseSW) SLessThan) noCheck) x y
+
+bvSLe :: SWord -> SWord -> SBool
+bvSLe x y
+  | y `cwIs` (\(k,c)-> maxNegativeBound k == signedRep k c) = true
+  | x `cwIs` (\(k,c)-> minNegativeBound k == signedRep k c) = true
+  | True = addArgs (<=) (liftSym2B (mkSymOpSC (eqOpt trueSW) SLessEq) noCheck) x y
+
+bvSGt :: SWord -> SWord -> SBool
+bvSGt x y
+  | y `cwIs` (\(k,c)-> maxNegativeBound k == signedRep k c) = false
+  | x `cwIs` (\(k,c)-> minNegativeBound k == signedRep k c) = false
+  | True = addArgs (>) (liftSym2B (mkSymOpSC (eqOpt falseSW) SGreaterThan) noCheck) x y
+
+bvSGe :: SWord -> SWord -> SBool
+bvSGe x y
+  | x `cwIs` (\(k,c)-> maxNegativeBound k == signedRep k c) = true
+  | y `cwIs` (\(k,c)-> minNegativeBound k == signedRep k c) = true
+  | True = addArgs (>=) (liftSym2B (mkSymOpSC (eqOpt trueSW) SGreaterEq) noCheck) x y
+
+bvAnd :: SWord -> SWord -> SWord 
+bvAnd x@(SBV (KBounded _ w) _) y
+  | x `valIs` (== 0) = x
+  | x `valIs` (== bit w - 1) = y
+  | y `valIs` (== 0) = x
+  | y `valIs` (== bit w - 1) = x
+  | True = addArgs (.&.) (liftSym2 (mkSymOp And) noCheck) x y
+bvAnd _ _ = error "SWord must be bounded"
+
+bvOr :: SWord -> SWord -> SWord 
+bvOr x@(SBV (KBounded _ w) _) y
+  | x `valIs` (== 0) = y
+  | x `valIs` (== bit w - 1) = x
+  | y `valIs` (== 0) = x
+  | y `valIs` (== bit w - 1) = y
+  | True = addArgs (.|.) (liftSym2 (mkSymOp Or) noCheck) x y
+bvOr _ _ = error "SWord must be bounded"
+
+bvXOr :: SWord -> SWord -> SWord 
+bvXOr x@(SBV (KBounded _ w) _) y
+  | x `valIs` (== 0) = y
+  | x `valIs` (== bit w - 1) = x
+  | y `valIs` (== 0) = x
+  | y `valIs` (== bit w - 1) = y
+  | True = addArgs xor (liftSym2 (mkSymOp XOr) noCheck) x y
+bvXOr _ _ = error "SWord must be bounded"
+
+bvNot :: SWord -> SWord
+bvNot = addArgs complement (liftSym1 (mkSymOp1 Not))
+
+bvShL :: SWord -> SWord -> SWord
+bvShL x y
+  | y `valIs` (== 0) = x
+  | True = addArgs (flip shiftL . fromIntegral) (liftSym2 (mkSymOp SymShl) noCheck) x y
+
+bvShR :: SWord -> SWord -> SWord
+bvShR x y
+  | y `valIs` (== 0) = x
+  | True = addArgs (flip shiftR . fromIntegral) (liftSym2 (mkSymOp SymShr) noCheck) x y
+
+-- actually I'm not sure how this works
+bvSShR :: SWord -> SWord -> SWord
+bvSShR x@(SBV (KBounded _ w) _) y
+  | y `valIs` (== 0) = x
+  | True = addArgs (\a i-> bit w .|. shiftR a (fromIntegral i)) (liftSym2 (mkSymOp SSymShr) noCheck) x y
+bvSShR _ _ = error "SWord must be bounded"
+
+bvDivRem :: SWord -> SWord -> (SWord, SWord)
+bvDivRem (SBV k (Left a)) (SBV _ (Left b)) =
+  let (q, r) = sQuotRem a b
+  in (SBV k (Left q), SBV k (Left r)) 
+bvDivRem x@(SBV k _) y
+   | y `valIs` (== 0) = (y,x)
+   | True = (SBV k (Right (cache (mk Quot))), SBV k (Right (cache (mk Rem))))
+  where mk o st = do sw1 <- sbvToSW st x
+                     sw2 <- sbvToSW st y
+                     mkSymOp o st k sw1 sw2
+
+-- how should negative division work?
+bvSDivRem :: SWord -> SWord -> (SWord, SWord)
+bvSDivRem (SBV k (Left a)) (SBV _ (Left b)) =
+  let (q, r) = sQuotRem a b
+  in (SBV k (Left q), SBV k (Left r)) 
+bvSDivRem x@(SBV k _) y
+   | y `valIs` (== 0) = (y,x)
+   | True = (SBV k (Right (cache (mk SQuot))), SBV k (Right (cache (mk SRem))))
+  where mk o st = do sw1 <- sbvToSW st x
+                     sw2 <- sbvToSW st y
+                     mkSymOp o st k sw1 sw2
+
+bvUDiv :: SWord -> SWord -> SWord
+bvUDiv a = fst . bvDivRem a
+
+bvURem :: SWord -> SWord -> SWord
+bvURem a = snd . bvDivRem a
+
+bvSDiv :: SWord -> SWord -> SWord
+bvSDiv a = fst . bvSDivRem a
+
+bvSRem :: SWord -> SWord -> SWord
+bvSRem a = snd . bvSDivRem a
+
+{-
+
+bvRotL :: SWord -> SWord -> SWord
+bvRotL x@(SBV (KBiunded _ w) _) y
+  | y `valIs` (== 0) = x
+  | True = addArgs (genRot w) liftSym2 (mkSymOp SymRotL) noCheck x y
+
+bvRotR :: SWord -> SWord -> SWord
+bvRotR x@(SBV (KBiunded _ w) _) y
+  | y `valIs` (== 0) = x
+  | True = addArgs (\a -> genRot w a . negate) liftSym2 (mkSymOp SymRotR) noCheck x y
+
+genRot :: Int -> Integer -> Integer -> Integer
+genRot m x i = mask m (shift x j .|. shift x (j - m))
+  where j = (fromInteger i) `mod` m
+
+mask :: Int -> Integer -> Integer
+mask w x = x .&. (bit w - 1)
+
+-}
+
+-- correct smtlib1 as well
 
 {-# ANN module "HLint: ignore Eta reduce"         #-}
 {-# ANN module "HLint: ignore Reduce duplication" #-}
