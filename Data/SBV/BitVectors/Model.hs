@@ -35,9 +35,9 @@ module Data.SBV.BitVectors.Model (
   bvEq, bvNeq, bvAdd, bvSub, 
   bvMul, bvLt, bvLe, bvGt, bvGe, 
   bvSLt, bvSLe, bvSGt, bvSGe,
-  bvAnd, bvOr, bvXOr, bvNot,
-  bvShL, bvShR, bvSShR,
-  bvUDiv, bvURem, bvSDiv, bvSRem
+  bvAnd, bvOr, bvXOr, bvNot, CompSWord(..),
+  bvShL, bvShR, bvSShR, bvShRC, bvShLC,
+  bvUDiv, bvURem, bvSDiv, bvSRem, bvJoin
   ) where
 
 -- import Control.Monad   (when, liftM)
@@ -1203,9 +1203,9 @@ instance SymWord a => Mergeable (SBV a) where
   -- branches is likely to be in a branch that's recursively evaluated.
   sBranch s a b
      | Just t <- unliteral sReduced = if t then a else b
-     | True                         = symbolicWordMerge False sReduced a b
+     | True                         = symbolicWordMerge False unliteral sReduced (kindOf a) a b
     where sReduced = reduceInPathCondition s
-  symbolicMerge = symbolicWordMerge True
+  symbolicMerge s a b = symbolicWordMerge True unliteral s (kindOf a) a b
   -- Custom version of select that translates to SMT-Lib tables at the base type of words
   select xs err ind
     | SBV _ (Left c) <- ind = case cwVal c of
@@ -1225,20 +1225,55 @@ instance SymWord a => Mergeable (SBV a) where
                                  let len = length xs
                                  newExpr st kElt (SBVApp (LkUp (idx, kInd, kElt, len) swi swe) [])
 
+newtype CompSWord = CompSWord {unComp :: SWord}
+
+toCW :: SWord -> Maybe CW
+toCW (SBV _ (Left c))  = Just c 
+toCW _ = Nothing
+
+instance Mergeable CompSWord where
+  -- sBranch is essentially the default method, but we are careful in not forcing the
+  -- arguments as ite does, since sBranch is expected to be used when one of the
+  -- branches is likely to be in a branch that's recursively evaluated.
+  sBranch s a@(CompSWord (SBV k _)) b
+     | Just t <- unliteral sReduced = if t then a else b
+     | True = CompSWord $ symbolicWordMerge False toCW sReduced k (unComp a) (unComp b)
+    where sReduced = reduceInPathCondition s
+  symbolicMerge s a@(CompSWord (SBV k _)) b = CompSWord $ symbolicWordMerge True toCW s k (unComp a) (unComp b)
+  -- Custom version of select that translates to SMT-Lib tables at the base type of words
+  select xs err ind
+    | SBV _ (Left c) <- ind = case cwVal c of
+                                CWInteger i -> if i < 0 || i >= genericLength xs
+                                               then err
+                                               else xs `genericIndex` i
+                                _           -> error "SBV.select: unsupported real valued select/index expression"
+  select xs (CompSWord err@(SBV k _)) ind  = CompSWord $ SBV kElt $ Right $ cache r
+     where kInd = kindOf ind
+           kElt = k
+           r st  = do sws <- mapM (sbvToSW st . unComp) xs
+                      swe <- sbvToSW st err
+                      if all (== swe) sws  -- off-chance that all elts are the same
+                         then return swe
+                         else do idx <- getTableIndex st kInd kElt sws
+                                 swi <- sbvToSW st ind
+                                 let len = length xs
+                                 newExpr st kElt (SBVApp (LkUp (idx, kInd, kElt, len) swi swe) [])
+
+
+
 -- symbolically merge two SBV words, based on the boolean condition given.
 -- The first argument controls whether we want to reduce the branches
 -- separately first, which avoids hanging onto huge thunks, and is usually
 -- the right thing to do for ite. But we precisely do not want to do that
 -- in case of sBranch, which is the case when one of the branches (typically
 -- the "else" branch is hanging off of a recursive call.
-symbolicWordMerge :: SymWord a => Bool -> SBool -> SBV a -> SBV a -> SBV a
-symbolicWordMerge force t a b
-  | force, Just av <- unliteral a, Just bv <- unliteral b, rationalSBVCheck a b, av == bv
+symbolicWordMerge :: Eq b => Bool -> (SBV a -> Maybe b) -> SBool -> Kind -> SBV a -> SBV a -> SBV a
+symbolicWordMerge force unlit t k a b
+  | force, Just av <- unlit a, Just bv <- unlit b, rationalSBVCheck a b, av == bv
   = a
   | True
   = SBV k $ Right $ cache c
-  where k = kindOf a
-        c st = do swt <- sbvToSW st t
+  where c st = do swt <- sbvToSW st t
                   case () of
                     () | swt == trueSW  -> sbvToSW st a       -- these two cases should never be needed as we expect symbolicMerge to be
                     () | swt == falseSW -> sbvToSW st b       -- called with symbolic tests, but just in case..
@@ -1776,6 +1811,17 @@ signedRep w x
   | w > 0 && testBit x (w - 1) = x - bit w
   | otherwise                  = x
 
+bvJoin :: SWord -> SWord -> SWord
+bvJoin (SBV (KBounded _ w1) (Left (cwVal -> CWInteger v1))) (SBV (KBounded _ w2) (Left (cwVal -> CWInteger v2))) =
+  SBV k (Left (CW (KBounded False (w1 + w2)) (CWInteger (shiftL v1 w1 .|. shiftL v2 w2)))) where
+    k = KBounded False (w1+w2)
+bvJoin a@(SBV (KBounded _ w1) _) b@(SBV (KBounded _ w2) _) = SBV k $ Right $ cache c where
+  c st = do sw1 <- sbvToSW st a
+            sw2 <- sbvToSW st b
+            mkSymOp Join st k sw1 sw2
+  k = KBounded False (w1+w2)
+bvJoin _ _ = error "bvJoin: SWords must be bounded"
+
 symBitVector :: Int -> Quantifier -> Symbolic SWord
 symBitVector w q = do
   st <- ask
@@ -1904,6 +1950,18 @@ bvXOr _ _ = error "SWord must be bounded"
 
 bvNot :: SWord -> SWord
 bvNot = addArgs complement (liftSym1 (mkSymOp1 Not))
+
+bvShLC :: SWord -> Int -> SWord
+bvShLC x y
+  | y == 0 = x
+  | y < 0 = bvShRC x (-y)
+  | True = addArgs (flip shiftL y) (liftSym1 (mkSymOp1 (Shl y))) x
+
+bvShRC :: SWord -> Int -> SWord
+bvShRC x y
+  | y == 0 = x
+  | y < 0 = bvShLC x (-y)
+  | True = addArgs (flip shiftR y) (liftSym1 (mkSymOp1 (Shr y))) x
 
 bvShL :: SWord -> SWord -> SWord
 bvShL x y

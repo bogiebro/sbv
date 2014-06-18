@@ -4,9 +4,9 @@ module Data.SBV.LowLevel (
   bvMul, bvLt, bvLe, bvGt, bvGe, 
   bvSLt, bvSLe, bvSGt, bvSGe,
   bvAnd, bvOr, bvXOr, bvNot,
-  bvShL, bvShR, bvSShR,
-  bvUDiv, bvURem, bvSDiv, bvSRem,
-  Quantifier(..)
+  bvShL, bvShR, bvSShR, bvShRC, bvShLC,
+  bvUDiv, bvURem, bvSDiv, bvSRem, bvJoin,
+  Quantifier(..), CompSWord(..)
   ) where
 
 import Data.SBV.BitVectors.Model
