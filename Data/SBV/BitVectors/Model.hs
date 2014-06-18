@@ -1825,9 +1825,10 @@ bvJoin _ _ = error "bvJoin: SWords must be bounded"
 symBitVector :: Int -> Quantifier -> Symbolic SWord
 symBitVector w q = do
   st <- ask
-  (sw, nm) <- liftIO $ newSW st (KBounded False w)
+  let k = (KBounded False w)
+  (sw, nm) <- liftIO $ newSW st k
   liftIO $ modifyIORef (rinps st) ((q, (sw, nm)):)
-  return $ SBV (KBounded False w) $ Right $ cache (const (return sw))
+  return $ SBV k $ Right $ cache (const (return sw))
 
 bitVector :: Int -> Integer -> SWord
 bitVector w v = SBV k $ Left $ mkConstCW k v where
