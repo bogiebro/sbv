@@ -37,7 +37,8 @@ module Data.SBV.BitVectors.Model (
   bvSLt, bvSLe, bvSGt, bvSGe,
   bvAnd, bvOr, bvXOr, bvNot, CompSWord(..),
   bvShL, bvShR, bvSShR, bvShRC, bvShLC,
-  bvUDiv, bvURem, bvSDiv, bvSRem, bvJoin
+  bvUDiv, bvURem, bvSDiv, bvSRem, bvJoin,
+  bvRotRC, bvRotLC, bvRotL
   ) where
 
 -- import Control.Monad   (when, liftM)
@@ -2016,17 +2017,29 @@ bvSDiv a = fst . bvSDivRem a
 bvSRem :: SWord -> SWord -> SWord
 bvSRem a = snd . bvSDivRem a
 
-{-
+bvRotLC :: SWord -> Int -> SWord
+bvRotLC x@(SBV (KBounded _ sz) _) y
+  | y < 0 = bvRotRC x (-y)
+  | y == 0 = x
+  | True = addArgs (rot True sz y) (liftSym1 (mkSymOp1 (Rol (y `mod` sz)))) x
+
+bvRotRC :: SWord -> Int -> SWord
+bvRotRC x@(SBV (KBounded _ sz) _) y
+  | y < 0 = bvRotLC x (-y)
+  | y == 0 = x
+  | True = addArgs (rot False sz y) (liftSym1 (mkSymOp1 (Ror (y `mod` sz)))) x
 
 bvRotL :: SWord -> SWord -> SWord
-bvRotL x@(SBV (KBiunded _ w) _) y
+bvRotL x@(SBV (KBounded _ w) _) y
   | y `valIs` (== 0) = x
-  | True = addArgs (genRot w) liftSym2 (mkSymOp SymRotL) noCheck x y
+  | True = addArgs (genRot w) (liftSym2 (mkSymOp SymRotL) noCheck) x y
 
+{-
 bvRotR :: SWord -> SWord -> SWord
-bvRotR x@(SBV (KBiunded _ w) _) y
+bvRotR x@(SBV (KBounded _ w) _) y
   | y `valIs` (== 0) = x
   | True = addArgs (\a -> genRot w a . negate) liftSym2 (mkSymOp SymRotR) noCheck x y
+-}
 
 genRot :: Int -> Integer -> Integer -> Integer
 genRot m x i = mask m (shift x j .|. shift x (j - m))
@@ -2035,9 +2048,6 @@ genRot m x i = mask m (shift x j .|. shift x (j - m))
 mask :: Int -> Integer -> Integer
 mask w x = x .&. (bit w - 1)
 
--}
-
--- correct smtlib1 as well
 
 {-# ANN module "HLint: ignore Eta reduce"         #-}
 {-# ANN module "HLint: ignore Reduce duplication" #-}

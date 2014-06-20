@@ -438,6 +438,7 @@ cvtExp rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
                                , (SymShr, lift2 "bvlshr")
                                , (SymShl, lift2 "bvshl")
                                , (SSymShr, lift2 "bvashr")
+                               , (SymRotL, srot "rotate_left")
                                ]
         sh inp@(SBVApp op args)
           | intOp, Just f <- lookup op smtOpIntTable
@@ -495,6 +496,9 @@ cvtExp rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
 
 rot :: (SW -> String) -> String -> Int -> SW -> String
 rot ssw o c x = "((_ " ++ o ++ " " ++ show c ++ ") " ++ ssw x ++ ")"
+
+srot o _ [x,y] = "((_" ++ o ++ " " ++ show y ++ ") " ++ x ++ ")"
+srot _ _ _ = error "srot failed"
 
 shft :: RoundingMode -> (SW -> String) -> String -> String -> Int -> SW -> String
 shft rm ssw oW oS c x = "(" ++ o ++ " " ++ ssw x ++ " " ++ cvtCW rm c' ++ ")"
