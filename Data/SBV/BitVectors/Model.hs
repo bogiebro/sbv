@@ -35,14 +35,12 @@ module Data.SBV.BitVectors.Model (
   bvEq, bvNeq, bvAdd, bvSub, 
   bvMul, bvLt, bvLe, bvGt, bvGe, 
   bvSLt, bvSLe, bvSGt, bvSGe,
-  bvAnd, bvOr, bvXOr, bvNot, CompSWord(..),
+  bvAnd, bvOr, bvXOr, bvNot, 
   bvShL, bvShR, bvSShR, bvShRC, bvShLC,
   bvUDiv, bvURem, bvSDiv, bvSRem, bvJoin,
-  bvRotRC, bvRotLC, bvRotL
+  bvRotRC, bvRotLC
   ) where
 
--- import Control.Monad   (when, liftM)
--- import Control.Monad.Trans (liftIO)
 import Data.IORef
 import Control.Monad.Reader
 
@@ -1178,7 +1176,7 @@ class Mergeable a where
    -- | Total indexing operation. @select xs default index@ is intuitively
    -- the same as @xs !! index@, except it evaluates to @default@ if @index@
    -- overflows
-   select :: (SymWord b, Num b) => [a] -> a -> SBV b -> a
+   select :: [a] -> a -> SBV b -> a
    -- default definitions
    ite s a b
     | Just t <- unliteral s = if t then a else b
@@ -1191,33 +1189,31 @@ class Mergeable a where
    -- symbolic as well. So, the binary search only pays off only if the indexed
    -- list is really humongous, which is not very common in general. (Also,
    -- for the case when the list is bit-vectors, we use SMT tables anyhow.)
-   select xs err ind
-    | isReal ind = error "SBV.select: unsupported real valued select/index expression"
-    | True       = walk xs ind err
-    where walk []     _ acc = acc
-          walk (e:es) i acc = walk es (i-1) (ite (i .== 0) e acc)
+   -- select xs err ind@(SBV k _)
+   --  | isReal ind = error "SBV.select: unsupported real valued select/index expression"
+   --  | True       = walk xs ind err
+   --  where walk []     _ acc = acc
+   --        walk (e:es) i acc = walk es (bvSub i (bitVector k 1)) (ite (bvEq i (bitVector k 0)) e acc)
 
 -- SBV
-instance SymWord a => Mergeable (SBV a) where
+instance Mergeable (SBV a) where
   -- sBranch is essentially the default method, but we are careful in not forcing the
   -- arguments as ite does, since sBranch is expected to be used when one of the
   -- branches is likely to be in a branch that's recursively evaluated.
-  sBranch s a b
+  sBranch s a@(SBV k _ ) b
      | Just t <- unliteral sReduced = if t then a else b
-     | True                         = symbolicWordMerge False unliteral sReduced (kindOf a) a b
+     | True                         = symbolicWordMerge False toCW sReduced k a b
     where sReduced = reduceInPathCondition s
-  symbolicMerge s a b = symbolicWordMerge True unliteral s (kindOf a) a b
+  symbolicMerge s a@(SBV k _ ) b = symbolicWordMerge True toCW s k a b
   -- Custom version of select that translates to SMT-Lib tables at the base type of words
-  select xs err ind
+  select xs err@(SBV k _) ind
     | SBV _ (Left c) <- ind = case cwVal c of
                                 CWInteger i -> if i < 0 || i >= genericLength xs
                                                then err
                                                else xs `genericIndex` i
                                 _           -> error "SBV.select: unsupported real valued select/index expression"
-  select xs err ind  = SBV kElt $ Right $ cache r
-     where kInd = kindOf ind
-           kElt = kindOf err
-           r st  = do sws <- mapM (sbvToSW st) xs
+  select xs err@(SBV kElt _ ) ind@(SBV kInd _)  = SBV kElt $ Right $ cache r
+     where r st  = do sws <- mapM (sbvToSW st) xs
                       swe <- sbvToSW st err
                       if all (== swe) sws  -- off-chance that all elts are the same
                          then return swe
@@ -1226,41 +1222,9 @@ instance SymWord a => Mergeable (SBV a) where
                                  let len = length xs
                                  newExpr st kElt (SBVApp (LkUp (idx, kInd, kElt, len) swi swe) [])
 
-newtype CompSWord = CompSWord {unComp :: SWord}
-
-toCW :: SWord -> Maybe CW
+toCW :: SBV a -> Maybe CW
 toCW (SBV _ (Left c))  = Just c 
 toCW _ = Nothing
-
-instance Mergeable CompSWord where
-  -- sBranch is essentially the default method, but we are careful in not forcing the
-  -- arguments as ite does, since sBranch is expected to be used when one of the
-  -- branches is likely to be in a branch that's recursively evaluated.
-  sBranch s a@(CompSWord (SBV k _)) b
-     | Just t <- unliteral sReduced = if t then a else b
-     | True = CompSWord $ symbolicWordMerge False toCW sReduced k (unComp a) (unComp b)
-    where sReduced = reduceInPathCondition s
-  symbolicMerge s a@(CompSWord (SBV k _)) b = CompSWord $ symbolicWordMerge True toCW s k (unComp a) (unComp b)
-  -- Custom version of select that translates to SMT-Lib tables at the base type of words
-  select xs err ind
-    | SBV _ (Left c) <- ind = case cwVal c of
-                                CWInteger i -> if i < 0 || i >= genericLength xs
-                                               then err
-                                               else xs `genericIndex` i
-                                _           -> error "SBV.select: unsupported real valued select/index expression"
-  select xs (CompSWord err@(SBV k _)) ind  = CompSWord $ SBV kElt $ Right $ cache r
-     where kInd = kindOf ind
-           kElt = k
-           r st  = do sws <- mapM (sbvToSW st . unComp) xs
-                      swe <- sbvToSW st err
-                      if all (== swe) sws  -- off-chance that all elts are the same
-                         then return swe
-                         else do idx <- getTableIndex st kInd kElt sws
-                                 swi <- sbvToSW st ind
-                                 let len = length xs
-                                 newExpr st kElt (SBVApp (LkUp (idx, kInd, kElt, len) swi swe) [])
-
-
 
 -- symbolically merge two SBV words, based on the boolean condition given.
 -- The first argument controls whether we want to reduce the branches
@@ -1812,7 +1776,7 @@ signedRep w x
   | w > 0 && testBit x (w - 1) = x - bit w
   | otherwise                  = x
 
-bvJoin :: SWord -> SWord -> SWord
+bvJoin :: SBV a -> SBV a -> SBV a
 bvJoin (SBV (KBounded _ w1) (Left (cwVal -> CWInteger v1))) (SBV (KBounded _ w2) (Left (cwVal -> CWInteger v2))) =
   SBV k (Left (CW (KBounded False (w1 + w2)) (CWInteger (shiftL v1 w1 .|. shiftL v2 w2)))) where
     k = KBounded False (w1+w2)
@@ -1823,7 +1787,7 @@ bvJoin a@(SBV (KBounded _ w1) _) b@(SBV (KBounded _ w2) _) = SBV k $ Right $ cac
   k = KBounded False (w1+w2)
 bvJoin _ _ = error "bvJoin: SWords must be bounded"
 
-symBitVector :: Int -> Quantifier -> Symbolic SWord
+symBitVector :: Int -> Quantifier -> Symbolic (SBV a)
 symBitVector w q = do
   st <- ask
   let k = (KBounded False w)
@@ -1831,18 +1795,18 @@ symBitVector w q = do
   liftIO $ modifyIORef (rinps st) ((q, (sw, nm)):)
   return $ SBV k $ Right $ cache (const (return sw))
 
-bitVector :: Int -> Integer -> SWord
+bitVector :: Int -> Integer -> SBV a
 bitVector w v = SBV k $ Left $ mkConstCW k v where
   k = KBounded False w
 
 noCheck :: a -> b -> Bool
 noCheck _ _ = True
  
-valIs :: SWord -> (Integer -> Bool) -> Bool
+valIs :: SBV a -> (Integer -> Bool) -> Bool
 valIs (SBV _ (Left (cwVal -> CWInteger c))) f = f c
 valIs _ _ = False
 
-cwIs :: SWord -> ((Int, Integer) -> Bool) -> Bool
+cwIs :: SBV a -> ((Int, Integer) -> Bool) -> Bool
 cwIs (SBV (KBounded _ w) (Left (cwVal -> CWInteger c))) f = f (w,c)
 cwIs _ _ = False
 
@@ -1850,24 +1814,24 @@ addArgs :: t1 -> ((t2 -> t3) -> t1 -> (t4 -> t5) -> (t6 -> t7) -> t) -> t
 addArgs op f = f badArg op badArg badArg where
   badArg _ = error "should be an integral value"
 
-bvEq :: SWord -> SWord -> SBool
+bvEq :: SBV a -> SBV a -> SBool
 bvEq = addArgs (==) $ liftSym2B (mkSymOpSC (eqOpt trueSW) Equal) noCheck
 
-bvNeq :: SWord -> SWord -> SBool
+bvNeq :: SBV a -> SBV a -> SBool
 bvNeq = addArgs (/=) $ liftSym2B (mkSymOpSC (eqOpt falseSW) NotEqual) noCheck
 
-bvAdd :: SWord -> SWord -> SWord
+bvAdd :: SBV a -> SBV a -> SBV a
 bvAdd x y
   | x `valIs` (== 0) = y  
   | y `valIs` (== 0) = x  
   | True = addArgs (+) (liftSym2 (mkSymOp Plus) noCheck) x y
 
-bvSub :: SWord -> SWord -> SWord
+bvSub :: SBV a -> SBV a -> SBV a
 bvSub x y
     | y `valIs` (== 0) = x
     | True = addArgs (-) (liftSym2 (mkSymOp Minus) noCheck) x y
 
-bvMul :: SWord -> SWord -> SWord
+bvMul :: SBV a -> SBV a -> SBV a
 bvMul x y
   | x `valIs` (== 0) = x
   | y `valIs` (== 0) = y
@@ -1875,64 +1839,64 @@ bvMul x y
   | y `valIs` (== 1) = x
   | True = addArgs (*) (liftSym2 (mkSymOp Times) noCheck) x y
 
-bvLt :: SWord -> SWord -> SBool
+bvLt :: SBV a -> SBV a -> SBool
 bvLt x y
   | x `cwIs` (\(k,c)-> maxPositiveBound k == c) = false
   | y `cwIs` (\(_,c)-> 0 == c) = false
   | True = addArgs (<) (liftSym2B (mkSymOpSC (eqOpt falseSW) LessThan) noCheck) x y
 
-bvLe :: SWord -> SWord -> SBool
+bvLe :: SBV a -> SBV a -> SBool
 bvLe x y
   | y `cwIs` (\(k,c)-> maxPositiveBound k == c) = true
   | x `cwIs` (\(_,c)-> 0 == c) = true
   | True = addArgs (<=) (liftSym2B (mkSymOpSC (eqOpt trueSW) LessEq) noCheck) x y
 
-bvGt :: SWord -> SWord -> SBool
+bvGt :: SBV a -> SBV a -> SBool
 bvGt x y
   | y `cwIs` (\(k,c)-> maxPositiveBound k == c) = false
   | x `cwIs` (\(_,c)-> 0 == c) = false
   | True = addArgs (>) (liftSym2B (mkSymOpSC (eqOpt falseSW) GreaterThan) noCheck) x y
 
-bvGe :: SWord -> SWord -> SBool
+bvGe :: SBV a -> SBV a -> SBool
 bvGe x y
   | x `cwIs` (\(k, c)-> maxPositiveBound k == c) = true
   | y `cwIs` (\(_, c)-> 0 == c) = true
   | True = addArgs (>=) (liftSym2B (mkSymOpSC (eqOpt trueSW) GreaterEq) noCheck) x y
 
-bvSLt :: SWord -> SWord -> SBool
+bvSLt :: SBV a -> SBV a -> SBool
 bvSLt x y
   | x `cwIs` (\(k,c)-> maxNegativeBound k == signedRep k c) = false
   | y `cwIs` (\(k,c)-> minNegativeBound k == signedRep k c) = false
   | True = addArgs (<) (liftSym2B (mkSymOpSC (eqOpt falseSW) SLessThan) noCheck) x y
 
-bvSLe :: SWord -> SWord -> SBool
+bvSLe :: SBV a -> SBV a -> SBool
 bvSLe x y
   | y `cwIs` (\(k,c)-> maxNegativeBound k == signedRep k c) = true
   | x `cwIs` (\(k,c)-> minNegativeBound k == signedRep k c) = true
   | True = addArgs (<=) (liftSym2B (mkSymOpSC (eqOpt trueSW) SLessEq) noCheck) x y
 
-bvSGt :: SWord -> SWord -> SBool
+bvSGt :: SBV a -> SBV a -> SBool
 bvSGt x y
   | y `cwIs` (\(k,c)-> maxNegativeBound k == signedRep k c) = false
   | x `cwIs` (\(k,c)-> minNegativeBound k == signedRep k c) = false
   | True = addArgs (>) (liftSym2B (mkSymOpSC (eqOpt falseSW) SGreaterThan) noCheck) x y
 
-bvSGe :: SWord -> SWord -> SBool
+bvSGe :: SBV a -> SBV a -> SBool
 bvSGe x y
   | x `cwIs` (\(k,c)-> maxNegativeBound k == signedRep k c) = true
   | y `cwIs` (\(k,c)-> minNegativeBound k == signedRep k c) = true
   | True = addArgs (>=) (liftSym2B (mkSymOpSC (eqOpt trueSW) SGreaterEq) noCheck) x y
 
-bvAnd :: SWord -> SWord -> SWord 
+bvAnd :: SBV a -> SBV a -> SBV a 
 bvAnd x@(SBV (KBounded _ w) _) y
   | x `valIs` (== 0) = x
   | x `valIs` (== bit w - 1) = y
   | y `valIs` (== 0) = x
   | y `valIs` (== bit w - 1) = x
   | True = addArgs (.&.) (liftSym2 (mkSymOp And) noCheck) x y
-bvAnd _ _ = error "SWord must be bounded"
+bvAnd _ _ = error "SBV a must be bounded"
 
-bvOr :: SWord -> SWord -> SWord 
+bvOr :: SBV a -> SBV a -> SBV a 
 bvOr x@(SBV (KBounded _ w) _) y
   | x `valIs` (== 0) = y
   | x `valIs` (== bit w - 1) = x
@@ -1941,48 +1905,47 @@ bvOr x@(SBV (KBounded _ w) _) y
   | True = addArgs (.|.) (liftSym2 (mkSymOp Or) noCheck) x y
 bvOr _ _ = error "SWord must be bounded"
 
-bvXOr :: SWord -> SWord -> SWord 
+bvXOr :: SBV a -> SBV a -> SBV a 
 bvXOr x@(SBV (KBounded _ w) _) y
   | x `valIs` (== 0) = y
   | x `valIs` (== bit w - 1) = x
   | y `valIs` (== 0) = x
   | y `valIs` (== bit w - 1) = y
   | True = addArgs xor (liftSym2 (mkSymOp XOr) noCheck) x y
-bvXOr _ _ = error "SWord must be bounded"
+bvXOr _ _ = error "SBV a must be bounded"
 
-bvNot :: SWord -> SWord
+bvNot :: SBV a -> SBV a
 bvNot = addArgs complement (liftSym1 (mkSymOp1 Not))
 
-bvShLC :: SWord -> Int -> SWord
+bvShLC :: SBV a -> Int -> SBV a
 bvShLC x y
   | y == 0 = x
   | y < 0 = bvShRC x (-y)
   | True = addArgs (flip shiftL y) (liftSym1 (mkSymOp1 (Shl y))) x
 
-bvShRC :: SWord -> Int -> SWord
+bvShRC :: SBV a -> Int -> SBV a
 bvShRC x y
   | y == 0 = x
   | y < 0 = bvShLC x (-y)
   | True = addArgs (flip shiftR y) (liftSym1 (mkSymOp1 (Shr y))) x
 
-bvShL :: SWord -> SWord -> SWord
+bvShL :: SBV a -> SBV a -> SBV a
 bvShL x y
   | y `valIs` (== 0) = x
   | True = addArgs (flip shiftL . fromIntegral) (liftSym2 (mkSymOp SymShl) noCheck) x y
 
-bvShR :: SWord -> SWord -> SWord
+bvShR :: SBV a -> SBV a -> SBV a
 bvShR x y
   | y `valIs` (== 0) = x
   | True = addArgs (flip shiftR . fromIntegral) (liftSym2 (mkSymOp SymShr) noCheck) x y
 
--- actually I'm not sure how this works
-bvSShR :: SWord -> SWord -> SWord
+bvSShR :: SBV a -> SBV a -> SBV a
 bvSShR x@(SBV (KBounded _ w) _) y
   | y `valIs` (== 0) = x
   | True = addArgs (\a i-> bit w .|. shiftR a (fromIntegral i)) (liftSym2 (mkSymOp SSymShr) noCheck) x y
-bvSShR _ _ = error "SWord must be bounded"
+bvSShR _ _ = error "SBV a must be bounded"
 
-bvDivRem :: SWord -> SWord -> (SWord, SWord)
+bvDivRem :: SBV a -> SBV a -> (SBV a, SBV a)
 bvDivRem (SBV k (Left a)) (SBV _ (Left b)) =
   let (q, r) = sQuotRem a b
   in (SBV k (Left q), SBV k (Left r)) 
@@ -1994,7 +1957,7 @@ bvDivRem x@(SBV k _) y
                      mkSymOp o st k sw1 sw2
 
 -- how should negative division work?
-bvSDivRem :: SWord -> SWord -> (SWord, SWord)
+bvSDivRem :: SBV a -> SBV a -> (SBV a, SBV a)
 bvSDivRem (SBV k (Left a)) (SBV _ (Left b)) =
   let (q, r) = sQuotRem a b
   in (SBV k (Left q), SBV k (Left r)) 
@@ -2005,43 +1968,29 @@ bvSDivRem x@(SBV k _) y
                      sw2 <- sbvToSW st y
                      mkSymOp o st k sw1 sw2
 
-bvUDiv :: SWord -> SWord -> SWord
+bvUDiv :: SBV a -> SBV a -> SBV a
 bvUDiv a = fst . bvDivRem a
 
-bvURem :: SWord -> SWord -> SWord
+bvURem :: SBV a -> SBV a -> SBV a
 bvURem a = snd . bvDivRem a
 
-bvSDiv :: SWord -> SWord -> SWord
+bvSDiv :: SBV a -> SBV a -> SBV a
 bvSDiv a = fst . bvSDivRem a
 
-bvSRem :: SWord -> SWord -> SWord
+bvSRem :: SBV a -> SBV a -> SBV a
 bvSRem a = snd . bvSDivRem a
 
-bvRotLC :: SWord -> Int -> SWord
+bvRotLC :: SBV a -> Int -> SBV a
 bvRotLC x@(SBV (KBounded _ sz) _) y
   | y < 0 = bvRotRC x (-y)
   | y == 0 = x
   | True = addArgs (rot True sz y) (liftSym1 (mkSymOp1 (Rol (y `mod` sz)))) x
 
-bvRotRC :: SWord -> Int -> SWord
+bvRotRC :: SBV a -> Int -> SBV a
 bvRotRC x@(SBV (KBounded _ sz) _) y
   | y < 0 = bvRotLC x (-y)
   | y == 0 = x
   | True = addArgs (rot False sz y) (liftSym1 (mkSymOp1 (Ror (y `mod` sz)))) x
-
-bvRotL :: SWord -> SWord -> SWord
-bvRotL = error "this function needs to be rethought" 
-
-{-
-bvRotR :: SWord -> SWord -> SWord
-bvRotR x@(SBV (KBounded _ w) _) y
-  | y `valIs` (== 0) = x
-  | True = addArgs (\a -> genRot w a . negate) liftSym2 (mkSymOp SymRotR) noCheck x y
--}
-
-genRot :: Int -> Integer -> Integer -> Integer
-genRot m x i = mask m (shift x j .|. shift x (j - m))
-  where j = (fromInteger i) `mod` m
 
 mask :: Int -> Integer -> Integer
 mask w x = x .&. (bit w - 1)
