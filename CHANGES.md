@@ -5,6 +5,16 @@
 
 ### Version 3.1, Not yet released
  
+ * Using multiple-SMT solvers in parallel:
+      * Added functions that let the user run multiple solvers, using asynchronous
+        threads. All results can be obtained (proveWithAll, proveWithAny, satWithAll),
+	or SBV can return the fastest result (satWithAny, allSatWithAll, allSatWithAny).
+	These functions are good for playing with multiple-solvers, especially on
+	machines with multiple-cores.
+      * Add function: sbvAvailableSolvers; which returns the list of solvers currently
+        available, as installed on the machine we are running. (Not the list that SBV
+	supports, but those that are actually available at run-time.) This function
+	is useful with the multi-solve API.
  * Implement sBranch:
       * sBranch is a variant of 'ite' that consults the external
         SMT solver to see if a given branch condition is satisfiable
@@ -18,13 +28,24 @@
         sBranch is used. Of course, if time-out happens, SBV will
 	assume the branch is feasible, in which case symbolic-termination
 	may come back to bite you.)
+ * New API:
+      * Add predicate 'isSNaN' which allows testing 'SFloat'/'SDouble' values
+        for nan-ness. This is similar to the Prelude function 'isNaN', except
+	the Prelude version requires a RealFrac instance, which unfortunately is
+	not currently implementable for cases. (Requires trigonometric functions etc.)
+	Thus, we provide 'isSNaN' separately (along with the already existing
+	'isFPPoint') to simplify reasoning with floating-point.
  * Examples:
      * Add Data/SBV/Examples/Misc/SBranch.hs, to illustrate the use of sBranch.
- * Misc:
-     * Add missing SFloat/SDouble instances for SatModel class
+ * Bug fixes:
      * Fix pipe-blocking issue, which exhibited itself in the presence of
        large numbers of variables (> 10K or so). See github issue #86. Thanks
        to Philipp Meyer for the fine report.
+ * Misc:
+     * Add missing SFloat/SDouble instances for SatModel class
+     * Explicitly support KBool as a kind, separating it from "KUnbounded False 1".
+       Thanks to Brian Huffman for contributing the changes. This should have no
+       user-visible impact, but comes in handy for internal reasons.
 
 ### Version 3.0, 2014-02-16
    
