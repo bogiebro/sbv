@@ -46,7 +46,7 @@ Library
                     TupleSections
                     TypeOperators
                     TypeSynonymInstances
-  Build-Depends   : base >= 4 && < 5
+  Build-Depends   : base >= 4.3 && < 5
                   , array, async, containers, deepseq, directory, filepath, old-time
                   , pretty, process, mtl, QuickCheck, random, syb
   Exposed-modules : Data.SBV
