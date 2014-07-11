@@ -2030,9 +2030,7 @@ bvRotRC x@(SBV (KBounded _ sz) _) y
   | True = addArgs (rot False sz y) (liftSym1 (mkSymOp1 (Ror (y `mod` sz)))) x
 
 bvRotL :: SWord -> SWord -> SWord
-bvRotL x@(SBV (KBounded _ w) _) y
-  | y `valIs` (== 0) = x
-  | True = addArgs (genRot w) (liftSym2 (mkSymOp SymRotL) noCheck) x y
+bvRotL = error "this function needs to be rethought" 
 
 {-
 bvRotR :: SWord -> SWord -> SWord

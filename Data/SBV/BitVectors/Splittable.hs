@@ -152,3 +152,4 @@ instance FromBits SWord32 where fromBitsLE = checkAndConvert 32
 instance FromBits SInt32  where fromBitsLE = checkAndConvert 32
 instance FromBits SWord64 where fromBitsLE = checkAndConvert 64
 instance FromBits SInt64  where fromBitsLE = checkAndConvert 64
+
