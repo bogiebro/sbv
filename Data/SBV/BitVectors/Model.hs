@@ -38,7 +38,7 @@ module Data.SBV.BitVectors.Model (
   bvAnd, bvOr, bvXOr, bvNot, 
   bvShL, bvShR, bvSShR, bvShRC, bvShLC,
   bvUDiv, bvURem, bvSDiv, bvSRem, bvJoin,
-  bvRotRC, bvRotLC
+  bvRotRC, bvRotLC, bvLength
   ) where
 
 import Data.IORef
@@ -1176,7 +1176,7 @@ class Mergeable a where
    -- | Total indexing operation. @select xs default index@ is intuitively
    -- the same as @xs !! index@, except it evaluates to @default@ if @index@
    -- overflows
-   select :: [a] -> a -> SBV b -> a
+   select :: (SymWord b, Num b) => [a] -> a -> SBV b -> a
    -- default definitions
    ite s a b
     | Just t <- unliteral s = if t then a else b
@@ -1194,6 +1194,12 @@ class Mergeable a where
    --  | True       = walk xs ind err
    --  where walk []     _ acc = acc
    --        walk (e:es) i acc = walk es (bvSub i (bitVector k 1)) (ite (bvEq i (bitVector k 0)) e acc)
+   select xs err ind = walk xs ind err
+    where walk []     _ acc = acc
+          walk (e:es) i acc = walk es (i-1) (ite (i .== 0) e acc)
+
+
+
 
 -- SBV
 instance Mergeable (SBV a) where
@@ -1206,7 +1212,7 @@ instance Mergeable (SBV a) where
     where sReduced = reduceInPathCondition s
   symbolicMerge s a@(SBV k _ ) b = symbolicWordMerge True toCW s k a b
   -- Custom version of select that translates to SMT-Lib tables at the base type of words
-  select xs err@(SBV k _) ind
+  select xs err ind
     | SBV _ (Left c) <- ind = case cwVal c of
                                 CWInteger i -> if i < 0 || i >= genericLength xs
                                                then err
@@ -1778,7 +1784,7 @@ signedRep w x
 
 bvJoin :: SBV a -> SBV a -> SBV a
 bvJoin (SBV (KBounded _ w1) (Left (cwVal -> CWInteger v1))) (SBV (KBounded _ w2) (Left (cwVal -> CWInteger v2))) =
-  SBV k (Left (CW (KBounded False (w1 + w2)) (CWInteger (shiftL v1 w1 .|. shiftL v2 w2)))) where
+  SBV k (Left (CW (KBounded False (w1 + w2)) (CWInteger (shiftL v1 w1 .|. v2 )))) where
     k = KBounded False (w1+w2)
 bvJoin a@(SBV (KBounded _ w1) _) b@(SBV (KBounded _ w2) _) = SBV k $ Right $ cache c where
   c st = do sw1 <- sbvToSW st a
@@ -1787,11 +1793,12 @@ bvJoin a@(SBV (KBounded _ w1) _) b@(SBV (KBounded _ w2) _) = SBV k $ Right $ cac
   k = KBounded False (w1+w2)
 bvJoin _ _ = error "bvJoin: SWords must be bounded"
 
-symBitVector :: Int -> Quantifier -> Symbolic (SBV a)
-symBitVector w q = do
+symBitVector :: Int -> Quantifier -> Maybe String -> Symbolic (SBV a)
+symBitVector w q mbNm = do
   st <- ask
   let k = (KBounded False w)
-  (sw, nm) <- liftIO $ newSW st k
+  (sw, internalname) <- liftIO $ newSW st k
+  let nm = maybe internalname id mbNm
   liftIO $ modifyIORef (rinps st) ((q, (sw, nm)):)
   return $ SBV k $ Right $ cache (const (return sw))
 
@@ -1813,6 +1820,10 @@ cwIs _ _ = False
 addArgs :: t1 -> ((t2 -> t3) -> t1 -> (t4 -> t5) -> (t6 -> t7) -> t) -> t
 addArgs op f = f badArg op badArg badArg where
   badArg _ = error "should be an integral value"
+
+bvLength :: SBV a -> Int
+bvLength (SBV (KBounded _ w) _) = w
+bvLength _ = error "should be an integral value"
 
 bvEq :: SBV a -> SBV a -> SBool
 bvEq = addArgs (==) $ liftSym2B (mkSymOpSC (eqOpt trueSW) Equal) noCheck
@@ -1891,7 +1902,7 @@ bvAnd :: SBV a -> SBV a -> SBV a
 bvAnd x@(SBV (KBounded _ w) _) y
   | x `valIs` (== 0) = x
   | x `valIs` (== bit w - 1) = y
-  | y `valIs` (== 0) = x
+  | y `valIs` (== 0) = y
   | y `valIs` (== bit w - 1) = x
   | True = addArgs (.&.) (liftSym2 (mkSymOp And) noCheck) x y
 bvAnd _ _ = error "SBV a must be bounded"
@@ -1908,9 +1919,7 @@ bvOr _ _ = error "SWord must be bounded"
 bvXOr :: SBV a -> SBV a -> SBV a 
 bvXOr x@(SBV (KBounded _ w) _) y
   | x `valIs` (== 0) = y
-  | x `valIs` (== bit w - 1) = x
   | y `valIs` (== 0) = x
-  | y `valIs` (== bit w - 1) = y
   | True = addArgs xor (liftSym2 (mkSymOp XOr) noCheck) x y
 bvXOr _ _ = error "SBV a must be bounded"
 
@@ -1932,12 +1941,12 @@ bvShRC x y
 bvShL :: SBV a -> SBV a -> SBV a
 bvShL x y
   | y `valIs` (== 0) = x
-  | True = addArgs (flip shiftL . fromIntegral) (liftSym2 (mkSymOp SymShl) noCheck) x y
+  | True = addArgs (\a b-> shiftL a (fromIntegral b)) (liftSym2 (mkSymOp SymShl) noCheck) x y
 
 bvShR :: SBV a -> SBV a -> SBV a
 bvShR x y
   | y `valIs` (== 0) = x
-  | True = addArgs (flip shiftR . fromIntegral) (liftSym2 (mkSymOp SymShr) noCheck) x y
+  | True = addArgs (\a b-> shiftR a (fromIntegral b)) (liftSym2 (mkSymOp SymShr) noCheck) x y
 
 bvSShR :: SBV a -> SBV a -> SBV a
 bvSShR x@(SBV (KBounded _ w) _) y
@@ -1992,8 +2001,8 @@ bvRotRC x@(SBV (KBounded _ sz) _) y
   | y == 0 = x
   | True = addArgs (rot False sz y) (liftSym1 (mkSymOp1 (Ror (y `mod` sz)))) x
 
-mask :: Int -> Integer -> Integer
-mask w x = x .&. (bit w - 1)
+-- mask :: Int -> Integer -> Integer
+-- mask w x = x .&. (bit w - 1)
 
 
 {-# ANN module "HLint: ignore Eta reduce"         #-}

@@ -3,7 +3,7 @@ module Data.SBV.LowLevel (
   bvEq, bvNeq, bvAdd, bvSub, 
   bvMul, bvLt, bvLe, bvGt, bvGe, 
   bvSLt, bvSLe, bvSGt, bvSGe,
-  bvAnd, bvOr, bvXOr, bvNot,
+  bvAnd, bvOr, bvXOr, bvNot, bvLength,
   bvShL, bvShR, bvSShR, bvShRC, bvShLC,
   bvUDiv, bvURem, bvSDiv, bvSRem, bvJoin,
   Quantifier(..), bvRotLC, bvRotRC
