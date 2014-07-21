@@ -541,8 +541,8 @@ instance (OrdSymbolic a, OrdSymbolic b, OrdSymbolic c, OrdSymbolic d, OrdSymboli
 --    mm = foldr1 (\a b -> ite (a .<= b) a b)
 -- @
 --
--- It is similar to the standard 'Integral' class, except ranging over symbolic instances.
-class (SymWord a, Num a, Bits a) => SIntegral a
+-- Datatypes with a bounded kind represented concretely by an Integer
+class SIntegral a
 
 -- 'SIntegral' Instances, including all possible variants except 'Bool', since booleans
 -- are not numbers.
@@ -555,6 +555,7 @@ instance SIntegral Int16
 instance SIntegral Int32
 instance SIntegral Int64
 instance SIntegral Integer
+instance SIntegral BitVector
 
 -- Boolean combinators
 instance Boolean SBool where
@@ -802,8 +803,8 @@ rot toLeft sz amt x
 
 -- | Replacement for 'testBit'. Since 'testBit' requires a 'Bool' to be returned,
 -- we cannot implement it for symbolic words. Index 0 is the least-significant bit.
-sbvTestBit :: (Num a, Bits a, SymWord a) => SBV a -> Int -> SBool
-sbvTestBit x i = (x .&. bit i) ./= 0
+sbvTestBit :: SIntegral a => SBV a -> Int -> SBool
+sbvTestBit x@(SBV (KBounded _ w) _) i = bvNeq (bitVector w 0) (bvAnd x (bitVector w (bit i)))
 
 -- | Replacement for 'popCount'. Since 'popCount' returns an 'Int', we cannot implement
 -- it for symbolic words. Here, we return an 'SWord8', which can overflow when used on
@@ -814,15 +815,12 @@ sbvTestBit x i = (x .&. bit i) ./= 0
 -- purposes. In any case, we do not support 'sbvPopCount' for unbounded symbolic integers,
 -- as the only possible implementation wouldn't symbolically terminate. So the only overflow
 -- issue is with really-really large concrete 'SInteger' values.
-sbvPopCount :: (Num a, Bits a, SymWord a) => SBV a -> SWord8
-sbvPopCount x
-  | isReal x          = error "SBV.sbvPopCount: Called on a real value"
-  | isConcrete x      = go 0 x
-  | not (isBounded x) = error "SBV.sbvPopCount: Called on an infinite precision symbolic value"
-  | True              = sum [ite b 1 0 | b <- blastLE x]
-  where -- concrete case
-        go !c 0 = c
-        go !c w = go (c+1) (w .&. (w-1))
+sbvPopCount :: SIntegral a => SBV a -> SWord8
+sbvPopCount (SBV _ (Left (cwVal -> CWInteger x))) = go 0 x where
+  go !c 0 = literal c
+  go !c w = go (c+1) (w .&. (w-1)) 
+sbvPopCount x@(SBV (KBounded _ k) _) =
+  sum [ite b (bitVector k 1) (bitVector k 0) | b <- blastLE x]
 
 -- | Generalization of 'setBit' based on a symbolic boolean. Note that 'setBit' and
 -- 'clearBit' are still available on Symbolic words, this operation comes handy when
@@ -833,10 +831,8 @@ setBitTo x i b = ite b (setBit x i) (clearBit x i)
 -- | Generalization of 'shiftL', when the shift-amount is symbolic. Since Haskell's
 -- 'shiftL' only takes an 'Int' as the shift amount, it cannot be used when we have
 -- a symbolic amount to shift with. The shift amount must be an unsigned quantity.
-sbvShiftLeft :: (SIntegral a, SIntegral b) => SBV a -> SBV b -> SBV a
-sbvShiftLeft x i
-  | isSigned i = error "sbvShiftLeft: shift amount should be unsigned"
-  | True       = select [x `shiftL` k | k <- [0 .. ghcBitSize x - 1]] 0 i
+sbvShiftLeft :: SIntegral a => SBV a -> SBV a -> SBV a
+sbvShiftLeft = bvShL
 
 -- | Generalization of 'shiftR', when the shift-amount is symbolic. Since Haskell's
 -- 'shiftR' only takes an 'Int' as the shift amount, it cannot be used when we have
@@ -845,32 +841,23 @@ sbvShiftLeft x i
 -- NB. If the shiftee is signed, then this is an arithmetic shift; otherwise it's logical,
 -- following the usual Haskell convention. See 'sbvSignedShiftArithRight' for a variant
 -- that explicitly uses the msb as the sign bit, even for unsigned underlying types.
-sbvShiftRight :: (SIntegral a, SIntegral b) => SBV a -> SBV b -> SBV a
-sbvShiftRight x i
-  | isSigned i = error "sbvShiftRight: shift amount should be unsigned"
-  | True       = select [x `shiftR` k | k <- [0 .. ghcBitSize x - 1]] 0 i
+sbvShiftRight :: SIntegral a => SBV a -> SBV a -> SBV a
+sbvShiftRight = bvShR
 
 -- | Arithmetic shift-right with a symbolic unsigned shift amount. This is equivalent
 -- to 'sbvShiftRight' when the argument is signed. However, if the argument is unsigned,
 -- then it explicitly treats its msb as a sign-bit, and uses it as the bit that
 -- gets shifted in. Useful when using the underlying unsigned bit representation to implement
 -- custom signed operations. Note that there is no direct Haskell analogue of this function.
-sbvSignedShiftArithRight:: (SIntegral a, SIntegral b) => SBV a -> SBV b -> SBV a
-sbvSignedShiftArithRight x i
-  | isSigned i = error "sbvSignedShiftArithRight: shift amount should be unsigned"
-  | isSigned x = sbvShiftRight x i
-  | True       = ite (msb x)
-                     (complement (sbvShiftRight (complement x) i))
-                     (sbvShiftRight x i)
+sbvSignedShiftArithRight:: SIntegral a => SBV a -> SBV a -> SBV a
+sbvSignedShiftArithRight = bvSShR
 
 -- | Full adder. Returns the carry-out from the addition.
 --
 -- N.B. Only works for unsigned types. Signed arguments will be rejected.
 fullAdder :: SIntegral a => SBV a -> SBV a -> (SBool, SBV a)
-fullAdder a b
-  | isSigned a = error "fullAdder: only works on unsigned numbers"
-  | True       = (a .> s ||| b .> s, s)
-  where s = a + b
+fullAdder a b = ((bvGt a s) ||| (bvGt b s), s)
+  where s = bvAdd a b
 
 -- | Full multiplier: Returns both the high-order and the low-order bits in a tuple,
 -- thus fully accounting for the overflow.
@@ -881,38 +868,31 @@ fullAdder a b
 -- thus involving bit-blasting. It'd be naive to expect SMT solvers to deal efficiently
 -- with properties involving this function, at least with the current state of the art.
 fullMultiplier :: SIntegral a => SBV a -> SBV a -> (SBV a, SBV a)
-fullMultiplier a b
-  | isSigned a = error "fullMultiplier: only works on unsigned numbers"
-  | True       = (go (ghcBitSize a) 0 a, a*b)
-  where go 0 p _ = p
+fullMultiplier a@(SBV (KBounded _ w) _) b = (go w (bitVector w 0) a, bvMul a b)
+  where -- go :: Int -> SBV a -> SBV a -> SBV a
+        go 0 p _ = p
         go n p x = let (c, p')  = ite (lsb x) (fullAdder p b) (false, p)
                        (o, p'') = shiftIn c p'
                        (_, x')  = shiftIn o x
                    in go (n-1) p'' x'
-        shiftIn k v = (lsb v, mask .|. (v `shiftR` 1))
-           where mask = ite k (bit (ghcBitSize v - 1)) 0
+        shiftIn k v = (lsb v, bvOr mask (bvShRC v 1))
+           where mask = ite k (bitVector w (bit (w - 1))) (bitVector w 0)
 
 -- | Little-endian blasting of a word into its bits. Also see the 'FromBits' class.
-blastLE :: (Num a, Bits a, SymWord a) => SBV a -> [SBool]
-blastLE x
- | isReal x          = error "SBV.blastLE: Called on a real value"
- | not (isBounded x) = error "SBV.blastLE: Called on an infinite precision value"
- | True              = map (sbvTestBit x) [0 .. intSizeOf x - 1]
+blastLE :: SIntegral a => SBV a -> [SBool]
+blastLE x@(SBV (KBounded _ k) _) = map (sbvTestBit x) [0 .. k - 1]
 
 -- | Big-endian blasting of a word into its bits. Also see the 'FromBits' class.
-blastBE :: (Num a, Bits a, SymWord a) => SBV a -> [SBool]
+blastBE ::SIntegral a => SBV a -> [SBool]
 blastBE = reverse . blastLE
 
 -- | Least significant bit of a word, always stored at index 0.
-lsb :: (Num a, Bits a, SymWord a) => SBV a -> SBool
+lsb :: SIntegral a => SBV a -> SBool
 lsb x = sbvTestBit x 0
 
 -- | Most significant bit of a word, always stored at the last position.
-msb :: (Num a, Bits a, SymWord a) => SBV a -> SBool
-msb x
- | isReal x          = error "SBV.msb: Called on a real value"
- | not (isBounded x) = error "SBV.msb: Called on an infinite precision value"
- | True              = sbvTestBit x (intSizeOf x - 1)
+msb :: SIntegral a => SBV a -> SBool
+msb x@(SBV (KBounded _ k) _) = sbvTestBit x (k - 1)
 
 -- Enum instance. These instances are suitable for use with concrete values,
 -- and will be less useful for symbolic values around. Note that `fromEnum` requires
@@ -1176,7 +1156,7 @@ class Mergeable a where
    -- | Total indexing operation. @select xs default index@ is intuitively
    -- the same as @xs !! index@, except it evaluates to @default@ if @index@
    -- overflows
-   select :: (SymWord b, Num b) => [a] -> a -> SBV b -> a
+   select :: SIntegral b => [a] -> a -> SBV b -> a
    -- default definitions
    ite s a b
     | Just t <- unliteral s = if t then a else b
@@ -1189,14 +1169,12 @@ class Mergeable a where
    -- symbolic as well. So, the binary search only pays off only if the indexed
    -- list is really humongous, which is not very common in general. (Also,
    -- for the case when the list is bit-vectors, we use SMT tables anyhow.)
-   -- select xs err ind@(SBV k _)
-   --  | isReal ind = error "SBV.select: unsupported real valued select/index expression"
-   --  | True       = walk xs ind err
-   --  where walk []     _ acc = acc
-   --        walk (e:es) i acc = walk es (bvSub i (bitVector k 1)) (ite (bvEq i (bitVector k 0)) e acc)
-   select xs err ind = walk xs ind err
+   select xs err ind@(SBV (KBounded _ k) _) = walk xs ind err
     where walk []     _ acc = acc
-          walk (e:es) i acc = walk es (i-1) (ite (i .== 0) e acc)
+          walk (e:es) i acc = walk es (bvSub i (bitVector k 1)) (ite (bvEq i (bitVector k 0)) e acc)
+   -- select xs err ind = walk xs ind err
+   --  where walk []     _ acc = acc
+   --        walk (e:es) i acc = walk es (i-1) (ite (i .== 0) e acc)
 
 
 
@@ -1782,7 +1760,7 @@ signedRep w x
   | w > 0 && testBit x (w - 1) = x - bit w
   | otherwise                  = x
 
-bvJoin :: SBV a -> SBV a -> SBV a
+bvJoin :: (SIntegral a, SIntegral b, SIntegral c) => SBV a -> SBV b -> SBV c
 bvJoin (SBV (KBounded _ w1) (Left (cwVal -> CWInteger v1))) (SBV (KBounded _ w2) (Left (cwVal -> CWInteger v2))) =
   SBV k (Left (CW (KBounded False (w1 + w2)) (CWInteger (shiftL v1 w1 .|. v2 )))) where
     k = KBounded False (w1+w2)
@@ -1802,7 +1780,7 @@ symBitVector w q mbNm = do
   liftIO $ modifyIORef (rinps st) ((q, (sw, nm)):)
   return $ SBV k $ Right $ cache (const (return sw))
 
-bitVector :: Int -> Integer -> SBV a
+bitVector :: SIntegral a => Int -> Integer -> SBV a
 bitVector w v = SBV k $ Left $ mkConstCW k v where
   k = KBounded False w
 
@@ -1821,28 +1799,28 @@ addArgs :: t1 -> ((t2 -> t3) -> t1 -> (t4 -> t5) -> (t6 -> t7) -> t) -> t
 addArgs op f = f badArg op badArg badArg where
   badArg _ = error "should be an integral value"
 
-bvLength :: SBV a -> Int
+bvLength :: SIntegral a => SBV a -> Int
 bvLength (SBV (KBounded _ w) _) = w
 bvLength _ = error "should be an integral value"
 
-bvEq :: SBV a -> SBV a -> SBool
+bvEq :: SIntegral a => SBV a -> SBV a -> SBool
 bvEq = addArgs (==) $ liftSym2B (mkSymOpSC (eqOpt trueSW) Equal) noCheck
 
-bvNeq :: SBV a -> SBV a -> SBool
+bvNeq :: SIntegral a => SBV a -> SBV a -> SBool
 bvNeq = addArgs (/=) $ liftSym2B (mkSymOpSC (eqOpt falseSW) NotEqual) noCheck
 
-bvAdd :: SBV a -> SBV a -> SBV a
+bvAdd :: SIntegral a => SBV a -> SBV a -> SBV a
 bvAdd x y
   | x `valIs` (== 0) = y  
   | y `valIs` (== 0) = x  
   | True = addArgs (+) (liftSym2 (mkSymOp Plus) noCheck) x y
 
-bvSub :: SBV a -> SBV a -> SBV a
+bvSub :: SIntegral a => SBV a -> SBV a -> SBV a
 bvSub x y
     | y `valIs` (== 0) = x
     | True = addArgs (-) (liftSym2 (mkSymOp Minus) noCheck) x y
 
-bvMul :: SBV a -> SBV a -> SBV a
+bvMul :: SIntegral a => SBV a -> SBV a -> SBV a
 bvMul x y
   | x `valIs` (== 0) = x
   | y `valIs` (== 0) = y
@@ -1850,55 +1828,55 @@ bvMul x y
   | y `valIs` (== 1) = x
   | True = addArgs (*) (liftSym2 (mkSymOp Times) noCheck) x y
 
-bvLt :: SBV a -> SBV a -> SBool
+bvLt :: SIntegral a => SBV a -> SBV a -> SBool
 bvLt x y
   | x `cwIs` (\(k,c)-> maxPositiveBound k == c) = false
   | y `cwIs` (\(_,c)-> 0 == c) = false
   | True = addArgs (<) (liftSym2B (mkSymOpSC (eqOpt falseSW) LessThan) noCheck) x y
 
-bvLe :: SBV a -> SBV a -> SBool
+bvLe :: SIntegral a => SBV a -> SBV a -> SBool
 bvLe x y
   | y `cwIs` (\(k,c)-> maxPositiveBound k == c) = true
   | x `cwIs` (\(_,c)-> 0 == c) = true
   | True = addArgs (<=) (liftSym2B (mkSymOpSC (eqOpt trueSW) LessEq) noCheck) x y
 
-bvGt :: SBV a -> SBV a -> SBool
+bvGt :: SIntegral a => SBV a -> SBV a -> SBool
 bvGt x y
   | y `cwIs` (\(k,c)-> maxPositiveBound k == c) = false
   | x `cwIs` (\(_,c)-> 0 == c) = false
   | True = addArgs (>) (liftSym2B (mkSymOpSC (eqOpt falseSW) GreaterThan) noCheck) x y
 
-bvGe :: SBV a -> SBV a -> SBool
+bvGe :: SIntegral a => SBV a -> SBV a -> SBool
 bvGe x y
   | x `cwIs` (\(k, c)-> maxPositiveBound k == c) = true
   | y `cwIs` (\(_, c)-> 0 == c) = true
   | True = addArgs (>=) (liftSym2B (mkSymOpSC (eqOpt trueSW) GreaterEq) noCheck) x y
 
-bvSLt :: SBV a -> SBV a -> SBool
+bvSLt :: SIntegral a => SBV a -> SBV a -> SBool
 bvSLt x y
   | x `cwIs` (\(k,c)-> maxNegativeBound k == signedRep k c) = false
   | y `cwIs` (\(k,c)-> minNegativeBound k == signedRep k c) = false
   | True = addArgs (<) (liftSym2B (mkSymOpSC (eqOpt falseSW) SLessThan) noCheck) x y
 
-bvSLe :: SBV a -> SBV a -> SBool
+bvSLe :: SIntegral a => SBV a -> SBV a -> SBool
 bvSLe x y
   | y `cwIs` (\(k,c)-> maxNegativeBound k == signedRep k c) = true
   | x `cwIs` (\(k,c)-> minNegativeBound k == signedRep k c) = true
   | True = addArgs (<=) (liftSym2B (mkSymOpSC (eqOpt trueSW) SLessEq) noCheck) x y
 
-bvSGt :: SBV a -> SBV a -> SBool
+bvSGt :: SIntegral a => SBV a -> SBV a -> SBool
 bvSGt x y
   | y `cwIs` (\(k,c)-> maxNegativeBound k == signedRep k c) = false
   | x `cwIs` (\(k,c)-> minNegativeBound k == signedRep k c) = false
   | True = addArgs (>) (liftSym2B (mkSymOpSC (eqOpt falseSW) SGreaterThan) noCheck) x y
 
-bvSGe :: SBV a -> SBV a -> SBool
+bvSGe :: SIntegral a => SBV a -> SBV a -> SBool
 bvSGe x y
   | x `cwIs` (\(k,c)-> maxNegativeBound k == signedRep k c) = true
   | y `cwIs` (\(k,c)-> minNegativeBound k == signedRep k c) = true
   | True = addArgs (>=) (liftSym2B (mkSymOpSC (eqOpt trueSW) SGreaterEq) noCheck) x y
 
-bvAnd :: SBV a -> SBV a -> SBV a 
+bvAnd :: SIntegral a => SBV a -> SBV a -> SBV a 
 bvAnd x@(SBV (KBounded _ w) _) y
   | x `valIs` (== 0) = x
   | x `valIs` (== bit w - 1) = y
@@ -1907,7 +1885,7 @@ bvAnd x@(SBV (KBounded _ w) _) y
   | True = addArgs (.&.) (liftSym2 (mkSymOp And) noCheck) x y
 bvAnd _ _ = error "SBV a must be bounded"
 
-bvOr :: SBV a -> SBV a -> SBV a 
+bvOr :: SIntegral a => SBV a -> SBV a -> SBV a 
 bvOr x@(SBV (KBounded _ w) _) y
   | x `valIs` (== 0) = y
   | x `valIs` (== bit w - 1) = x
@@ -1916,45 +1894,45 @@ bvOr x@(SBV (KBounded _ w) _) y
   | True = addArgs (.|.) (liftSym2 (mkSymOp Or) noCheck) x y
 bvOr _ _ = error "SWord must be bounded"
 
-bvXOr :: SBV a -> SBV a -> SBV a 
+bvXOr :: SIntegral a => SBV a -> SBV a -> SBV a 
 bvXOr x@(SBV (KBounded _ w) _) y
   | x `valIs` (== 0) = y
   | y `valIs` (== 0) = x
   | True = addArgs xor (liftSym2 (mkSymOp XOr) noCheck) x y
 bvXOr _ _ = error "SBV a must be bounded"
 
-bvNot :: SBV a -> SBV a
+bvNot :: SIntegral a => SBV a -> SBV a
 bvNot = addArgs complement (liftSym1 (mkSymOp1 Not))
 
-bvShLC :: SBV a -> Int -> SBV a
+bvShLC :: SIntegral a => SBV a -> Int -> SBV a
 bvShLC x y
   | y == 0 = x
   | y < 0 = bvShRC x (-y)
   | True = addArgs (flip shiftL y) (liftSym1 (mkSymOp1 (Shl y))) x
 
-bvShRC :: SBV a -> Int -> SBV a
+bvShRC :: SIntegral a => SBV a -> Int -> SBV a
 bvShRC x y
   | y == 0 = x
   | y < 0 = bvShLC x (-y)
   | True = addArgs (flip shiftR y) (liftSym1 (mkSymOp1 (Shr y))) x
 
-bvShL :: SBV a -> SBV a -> SBV a
+bvShL :: SIntegral a => SBV a -> SBV a -> SBV a
 bvShL x y
   | y `valIs` (== 0) = x
   | True = addArgs (\a b-> shiftL a (fromIntegral b)) (liftSym2 (mkSymOp SymShl) noCheck) x y
 
-bvShR :: SBV a -> SBV a -> SBV a
+bvShR :: SIntegral a => SBV a -> SBV a -> SBV a
 bvShR x y
   | y `valIs` (== 0) = x
   | True = addArgs (\a b-> shiftR a (fromIntegral b)) (liftSym2 (mkSymOp SymShr) noCheck) x y
 
-bvSShR :: SBV a -> SBV a -> SBV a
+bvSShR :: SIntegral a => SBV a -> SBV a -> SBV a
 bvSShR x@(SBV (KBounded _ w) _) y
   | y `valIs` (== 0) = x
   | True = addArgs (\a i-> bit w .|. shiftR a (fromIntegral i)) (liftSym2 (mkSymOp SSymShr) noCheck) x y
 bvSShR _ _ = error "SBV a must be bounded"
 
-bvDivRem :: SBV a -> SBV a -> (SBV a, SBV a)
+bvDivRem :: SIntegral a => SBV a -> SBV a -> (SBV a, SBV a)
 bvDivRem (SBV k (Left a)) (SBV _ (Left b)) =
   let (q, r) = sQuotRem a b
   in (SBV k (Left q), SBV k (Left r)) 
@@ -1966,7 +1944,7 @@ bvDivRem x@(SBV k _) y
                      mkSymOp o st k sw1 sw2
 
 -- how should negative division work?
-bvSDivRem :: SBV a -> SBV a -> (SBV a, SBV a)
+bvSDivRem :: SIntegral a => SBV a -> SBV a -> (SBV a, SBV a)
 bvSDivRem (SBV k (Left a)) (SBV _ (Left b)) =
   let (q, r) = sQuotRem a b
   in (SBV k (Left q), SBV k (Left r)) 
@@ -1977,33 +1955,29 @@ bvSDivRem x@(SBV k _) y
                      sw2 <- sbvToSW st y
                      mkSymOp o st k sw1 sw2
 
-bvUDiv :: SBV a -> SBV a -> SBV a
+bvUDiv :: SIntegral a => SBV a -> SBV a -> SBV a
 bvUDiv a = fst . bvDivRem a
 
-bvURem :: SBV a -> SBV a -> SBV a
+bvURem :: SIntegral a => SBV a -> SBV a -> SBV a
 bvURem a = snd . bvDivRem a
 
-bvSDiv :: SBV a -> SBV a -> SBV a
+bvSDiv :: SIntegral a => SBV a -> SBV a -> SBV a
 bvSDiv a = fst . bvSDivRem a
 
-bvSRem :: SBV a -> SBV a -> SBV a
+bvSRem :: SIntegral a => SBV a -> SBV a -> SBV a
 bvSRem a = snd . bvSDivRem a
 
-bvRotLC :: SBV a -> Int -> SBV a
+bvRotLC :: SIntegral a => SBV a -> Int -> SBV a
 bvRotLC x@(SBV (KBounded _ sz) _) y
   | y < 0 = bvRotRC x (-y)
   | y == 0 = x
   | True = addArgs (rot True sz y) (liftSym1 (mkSymOp1 (Rol (y `mod` sz)))) x
 
-bvRotRC :: SBV a -> Int -> SBV a
+bvRotRC :: SIntegral a => SBV a -> Int -> SBV a
 bvRotRC x@(SBV (KBounded _ sz) _) y
   | y < 0 = bvRotLC x (-y)
   | y == 0 = x
   | True = addArgs (rot False sz y) (liftSym1 (mkSymOp1 (Ror (y `mod` sz)))) x
-
--- mask :: Int -> Integer -> Integer
--- mask w x = x .&. (bit w - 1)
-
 
 {-# ANN module "HLint: ignore Eta reduce"         #-}
 {-# ANN module "HLint: ignore Reduce duplication" #-}

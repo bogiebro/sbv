@@ -31,7 +31,7 @@ module Data.SBV.BitVectors.Data
  , ArrayContext(..), ArrayInfo, SymArray(..), SFunArray(..), mkSFunArray, SArray(..), arrayUIKind
  , sbvToSW, sbvToSymSW, forceSWArg
  , SBVExpr(..), newExpr, newSW
- , cache, Cached, uncache, uncacheAI, HasKind(..)
+ , cache, Cached, uncache, uncacheAI, HasKind(..), isConcrete, isSymbolic
  , Op(..), NamedSymVar, UnintKind(..), getTableIndex, SBVPgm(..), Symbolic, runSymbolic, runSymbolic', State(..), getPathCondition, extendPathCondition
  , inProofMode, SBVRunMode(..), Kind(..), Outputtable(..), Result(..)
  , Logic(..), SMTLibLogic(..)
@@ -1003,10 +1003,6 @@ class (HasKind a, Ord a) => SymWord a where
   unliteral :: SBV a -> Maybe a
   -- | Extract a literal, from a CW representation
   fromCW :: CW -> a
-  -- | Is the symbolic word concrete?
-  isConcrete :: SBV a -> Bool
-  -- | Is the symbolic word really symbolic?
-  isSymbolic :: SBV a -> Bool
   -- | Does it concretely satisfy the given predicate?
   isConcretely :: SBV a -> (a -> Bool) -> Bool
   -- | max/minbounds, if available. Note that we don't want
@@ -1031,9 +1027,6 @@ class (HasKind a, Ord a) => SymWord a where
   symbolics      = mapM symbolic
   unliteral (SBV _ (Left c))  = Just $ fromCW c
   unliteral _                 = Nothing
-  isConcrete (SBV _ (Left _)) = True
-  isConcrete _                = False
-  isSymbolic = not . isConcrete
   isConcretely s p
     | Just i <- unliteral s = p i
     | True                  = False
@@ -1060,6 +1053,14 @@ class (HasKind a, Ord a) => SymWord a where
             nm = maybe ('s':show ctr) id mbNm
         liftIO $ modifyIORef (rinps st) ((q, (sw, nm)):)
         return $ SBV k $ Right $ cache (const (return sw))
+
+isConcrete :: SBV a -> Bool
+isConcrete (SBV _ (Left _)) = True
+isConcrete _                = False
+
+isSymbolic :: SBV a -> Bool
+isSymbolic = not . isConcrete
+
 
 instance (Random a, SymWord a) => Random (SBV a) where
   randomR (l, h) g = case (unliteral l, unliteral h) of
