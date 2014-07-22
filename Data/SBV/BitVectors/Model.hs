@@ -31,7 +31,7 @@ module Data.SBV.BitVectors.Model (
   , sInt64s, sInteger, sIntegers, sReal, sReals, toSReal, sFloat, sFloats, sDouble, sDoubles, slet
   , fusedMA,
 
-  SWord, symBitVector, bitVector,
+  SWord, symBitVector, bitVector, bvSetBit,
   bvEq, bvNeq, bvAdd, bvSub, 
   bvMul, bvLt, bvLe, bvGt, bvGe, 
   bvSLt, bvSLe, bvSGt, bvSGe,
@@ -1808,6 +1808,9 @@ bvEq = addArgs (==) $ liftSym2B (mkSymOpSC (eqOpt trueSW) Equal) noCheck
 
 bvNeq :: SIntegral a => SBV a -> SBV a -> SBool
 bvNeq = addArgs (/=) $ liftSym2B (mkSymOpSC (eqOpt falseSW) NotEqual) noCheck
+
+bvSetBit :: SIntegral a => SBV a -> Int -> SBV a
+bvSetBit a@(SBV (KBounded _ k) _) i = bvOr a (bitVector k (shiftL 1 i))
 
 bvAdd :: SIntegral a => SBV a -> SBV a -> SBV a
 bvAdd x y

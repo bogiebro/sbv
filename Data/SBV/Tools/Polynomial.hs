@@ -35,7 +35,7 @@ import Data.SBV.Utils.Boolean
 -- for all @x@ (including @0@)
 --
 -- Minimal complete definition: 'pMult', 'pDivMod', 'showPolynomial'
-class (Num a, Bits a) => Polynomial a where
+class Polynomial a where
  -- | Given bit-positions to be set, create a polynomial
  -- For instance
  --
@@ -69,11 +69,11 @@ class (Num a, Bits a) => Polynomial a where
  showPolynomial :: Bool -> a -> String
 
  -- defaults.. Minumum complete definition: pMult, pDivMod, showPolynomial
- polynomial = foldr (flip setBit) 0
- pAdd       = xor
- pDiv x y   = fst (pDivMod x y)
- pMod x y   = snd (pDivMod x y)
- showPoly   = showPolynomial False
+--  polynomial = foldr (flip setBit) 0
+--  pAdd       = xor
+--  pDiv x y   = fst (pDivMod x y)
+--  pMod x y   = snd (pDivMod x y)
+--  showPoly   = showPolynomial False
 
 
 instance Polynomial Word8   where {showPolynomial   = sp;           pMult = lift polyMult; pDivMod = liftC polyDivMod}
@@ -85,6 +85,14 @@ instance Polynomial SWord16 where {showPolynomial b = liftS (sp b); pMult = poly
 instance Polynomial SWord32 where {showPolynomial b = liftS (sp b); pMult = polyMult;      pDivMod = polyDivMod}
 instance Polynomial SWord64 where {showPolynomial b = liftS (sp b); pMult = polyMult;      pDivMod = polyDivMod}
 
+instance Polynomial SWord where
+  showPolynomial _ a = show a -- should expand this instance
+  pMult = polyMult
+  pDivMod x@(SBV (KBounded _ sz) _) y = ite (bvEq y (bitVector sz 0)) (bitVector sz 0, x) (adjust d, adjust r)
+   where adjust xs = fromBitsLE $ genericTake sz $ xs ++ repeat false
+         (d, r)    = mdp (blastLE x) (blastLE y)
+  
+
 lift :: SymWord a => ((SBV a, SBV a, [Int]) -> SBV a) -> (a, a, [Int]) -> a
 lift f (x, y, z) = fromJust $ unliteral $ f (literal x, literal y, z)
 liftC :: SymWord a => (SBV a -> SBV a -> (SBV a, SBV a)) -> a -> a -> (a, a)
@@ -92,7 +100,7 @@ liftC f x y = let (a, b) = f (literal x) (literal y) in (fromJust (unliteral a),
 liftS :: SymWord a => (a -> String) -> SBV a -> String
 liftS f s
   | Just x <- unliteral s = f x
-  | True                  = show s
+  | True = show s    
 
 -- | Pretty print as a polynomial
 sp :: Bits a => Bool -> a -> String
@@ -131,22 +139,16 @@ ites s xs ys
 
 -- | Multiply two polynomials and reduce by the third (concrete) irreducible, given by its coefficients.
 -- See the remarks for the 'pMult' function for this design choice
-polyMult :: (Num a, SIntegral a, Bits a, SymWord a, FromBits (SBV a)) => (SBV a, SBV a, [Int]) -> SBV a
-polyMult (x, y, red)
-  | isReal x
-  = error $ "SBV.polyMult: Received a real value: " ++ show x
-  | not (isBounded x)
-  = error $ "SBV.polyMult: Received infinite precision value: " ++ show x
-  | True
+polyMult :: (SIntegral a, FromBits (SBV a)) => (SBV a, SBV a, [Int]) -> SBV a
+polyMult (x@(SBV (KBounded _ sz) _), y, red)
   = fromBitsLE $ genericTake sz $ r ++ repeat false
   where (_, r) = mdp ms rs
         ms = genericTake (2*sz) $ mul (blastLE x) (blastLE y) [] ++ repeat false
-        rs = genericTake (2*sz) $ [if i `elem` red then true else false |  i <- [0 .. foldr max 0 red] ] ++ repeat false
-        sz = intSizeOf x
+        rs = genericTake (2*sz) $ [if i `elem` red then true else false |  i <- [0 .. foldr max 0 red] ]
         mul _  []     ps = ps
         mul as (b:bs) ps = mul (false:as) bs (ites b (as `addPoly` ps) ps)
 
-polyDivMod :: (Num a, SIntegral a, Bits a, SymWord a, FromBits (SBV a)) => SBV a -> SBV a -> (SBV a, SBV a)
+polyDivMod :: (Num a, Bits a, SIntegral a, SymWord a, FromBits (SBV a)) => SBV a -> SBV a -> (SBV a, SBV a)
 polyDivMod x y
    | isReal x
    = error $ "SBV.polyDivMod: Received a real value: " ++ show x

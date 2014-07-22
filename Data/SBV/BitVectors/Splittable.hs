@@ -124,14 +124,14 @@ class FromBits a where
  fromBitsBE = fromBitsLE . reverse
 
 -- | Construct a symbolic word from its bits given in little-endian
-fromBinLE :: (Num a, Bits a, SymWord a) => [SBool] -> SBV a
-fromBinLE = go 0 0
+fromBinLE :: SIntegral a => [SBool] -> SBV a
+fromBinLE xs = go (bitVector (length xs) 0) 0 xs
   where go !acc _  []     = acc
-        go !acc !i (x:xs) = go (ite x (setBit acc i) acc) (i+1) xs
+        go !acc !i (x:xs) = go (ite x (bvSetBit acc i) acc) (i+1) xs
 
 -- | Perform a sanity check that we should receive precisely the same
 -- number of bits as required by the resulting type. The input is little-endian
-checkAndConvert :: (Num a, Bits a, SymWord a) => Int -> [SBool] -> SBV a
+checkAndConvert :: (Num a, SIntegral a, Bits a, SymWord a) => Int -> [SBool] -> SBV a
 checkAndConvert sz xs
   | sz /= l
   = error $ "SBV.fromBits.SWord" ++ ssz ++ ": Expected " ++ ssz ++ " elements, got: " ++ show l
@@ -152,4 +152,5 @@ instance FromBits SWord32 where fromBitsLE = checkAndConvert 32
 instance FromBits SInt32  where fromBitsLE = checkAndConvert 32
 instance FromBits SWord64 where fromBitsLE = checkAndConvert 64
 instance FromBits SInt64  where fromBitsLE = checkAndConvert 64
+instance FromBits SWord   where fromBitsLE = fromBinLE
 
