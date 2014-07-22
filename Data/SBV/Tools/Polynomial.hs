@@ -70,27 +70,32 @@ class Polynomial a where
 
  -- defaults.. Minumum complete definition: pMult, pDivMod, showPolynomial
 --  polynomial = foldr (flip setBit) 0
---  pAdd       = xor
---  pDiv x y   = fst (pDivMod x y)
---  pMod x y   = snd (pDivMod x y)
---  showPoly   = showPolynomial False
+ pDiv x y   = fst (pDivMod x y)
+ pMod x y   = snd (pDivMod x y)
+ showPoly   = showPolynomial False
 
+bitPolynomial :: (Num a, Bits a) => [Int] -> a
+bitPolynomial = foldr (flip setBit) 0
 
-instance Polynomial Word8   where {showPolynomial   = sp;           pMult = lift polyMult; pDivMod = liftC polyDivMod}
-instance Polynomial Word16  where {showPolynomial   = sp;           pMult = lift polyMult; pDivMod = liftC polyDivMod}
-instance Polynomial Word32  where {showPolynomial   = sp;           pMult = lift polyMult; pDivMod = liftC polyDivMod}
-instance Polynomial Word64  where {showPolynomial   = sp;           pMult = lift polyMult; pDivMod = liftC polyDivMod}
-instance Polynomial SWord8  where {showPolynomial b = liftS (sp b); pMult = polyMult;      pDivMod = polyDivMod}
-instance Polynomial SWord16 where {showPolynomial b = liftS (sp b); pMult = polyMult;      pDivMod = polyDivMod}
-instance Polynomial SWord32 where {showPolynomial b = liftS (sp b); pMult = polyMult;      pDivMod = polyDivMod}
-instance Polynomial SWord64 where {showPolynomial b = liftS (sp b); pMult = polyMult;      pDivMod = polyDivMod}
+instance Polynomial Word8   where {showPolynomial = sp; pAdd = xor; polynomial = bitPolynomial; pMult = lift polyMult; pDivMod = liftC polyDivMod}
+instance Polynomial Word16  where {showPolynomial = sp; pAdd = xor; polynomial = bitPolynomial; pMult = lift polyMult; pDivMod = liftC polyDivMod}
+instance Polynomial Word32  where {showPolynomial = sp; pAdd = xor; polynomial = bitPolynomial; pMult = lift polyMult; pDivMod = liftC polyDivMod}
+instance Polynomial Word64  where {showPolynomial = sp; pAdd = xor; polynomial = bitPolynomial; pMult = lift polyMult; pDivMod = liftC polyDivMod}
+
+instance Polynomial SWord8  where {showPolynomial b = liftS (sp b); pAdd = xor; polynomial = bitPolynomial; pMult = polyMult; pDivMod = polyDivMod}
+instance Polynomial SWord16 where {showPolynomial b = liftS (sp b); pAdd = xor; polynomial = bitPolynomial; pMult = polyMult; pDivMod = polyDivMod}
+instance Polynomial SWord32 where {showPolynomial b = liftS (sp b); pAdd = xor; polynomial = bitPolynomial; pMult = polyMult; pDivMod = polyDivMod}
+instance Polynomial SWord64 where {showPolynomial b = liftS (sp b); pAdd = xor; polynomial = bitPolynomial; pMult = polyMult; pDivMod = polyDivMod}
 
 instance Polynomial SWord where
+  pAdd = bvXOr
+  polynomial l = foldr (flip bvSetBit) (bitVector (length l) 0) l
   showPolynomial _ a = show a -- should expand this instance
   pMult = polyMult
   pDivMod x@(SBV (KBounded _ sz) _) y = ite (bvEq y (bitVector sz 0)) (bitVector sz 0, x) (adjust d, adjust r)
    where adjust xs = fromBitsLE $ genericTake sz $ xs ++ repeat false
          (d, r)    = mdp (blastLE x) (blastLE y)
+  pDivMod _ _ = error "the impossible happened: an SWord become unbounded"
   
 
 lift :: SymWord a => ((SBV a, SBV a, [Int]) -> SBV a) -> (a, a, [Int]) -> a
@@ -147,6 +152,7 @@ polyMult (x@(SBV (KBounded _ sz) _), y, red)
         rs = genericTake (2*sz) $ [if i `elem` red then true else false |  i <- [0 .. foldr max 0 red] ]
         mul _  []     ps = ps
         mul as (b:bs) ps = mul (false:as) bs (ites b (as `addPoly` ps) ps)
+polyMult _ = error "cannot multiply unbounded polynomials"
 
 polyDivMod :: (Num a, Bits a, SIntegral a, SymWord a, FromBits (SBV a)) => SBV a -> SBV a -> (SBV a, SBV a)
 polyDivMod x y

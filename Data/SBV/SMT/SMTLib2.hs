@@ -499,9 +499,6 @@ cvtExp rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
 rot :: (SW -> String) -> String -> Int -> SW -> String
 rot ssw o c x = "((_ " ++ o ++ " " ++ show c ++ ") " ++ ssw x ++ ")"
 
-srot o _ [x,y] = "((_ " ++ o ++ " " ++ y ++ ") " ++ x ++ ")"
-srot _ _ _ = error "srot failed"
-
 shft :: RoundingMode -> (SW -> String) -> String -> String -> Int -> SW -> String
 shft rm ssw oW oS c x = "(" ++ o ++ " " ++ ssw x ++ " " ++ cvtCW rm c' ++ ")"
    where s  = hasSign x

@@ -125,7 +125,7 @@ class FromBits a where
 
 -- | Construct a symbolic word from its bits given in little-endian
 fromBinLE :: SIntegral a => [SBool] -> SBV a
-fromBinLE xs = go (bitVector (length xs) 0) 0 xs
+fromBinLE l = go (bitVector (length l) 0) 0 l
   where go !acc _  []     = acc
         go !acc !i (x:xs) = go (ite x (bvSetBit acc i) acc) (i+1) xs
 

@@ -805,6 +805,7 @@ rot toLeft sz amt x
 -- we cannot implement it for symbolic words. Index 0 is the least-significant bit.
 sbvTestBit :: SIntegral a => SBV a -> Int -> SBool
 sbvTestBit x@(SBV (KBounded _ w) _) i = bvNeq (bitVector w 0) (bvAnd x (bitVector w (bit i)))
+sbvTestBit _ _ = error "cannot test bit of unbounded SIntegral value"
 
 -- | Replacement for 'popCount'. Since 'popCount' returns an 'Int', we cannot implement
 -- it for symbolic words. Here, we return an 'SWord8', which can overflow when used on
@@ -821,6 +822,7 @@ sbvPopCount (SBV _ (Left (cwVal -> CWInteger x))) = go 0 x where
   go !c w = go (c+1) (w .&. (w-1)) 
 sbvPopCount x@(SBV (KBounded _ k) _) =
   sum [ite b (bitVector k 1) (bitVector k 0) | b <- blastLE x]
+sbvPopCount _ = error "cannot count bits of unbounded SIntegral value"
 
 -- | Generalization of 'setBit' based on a symbolic boolean. Note that 'setBit' and
 -- 'clearBit' are still available on Symbolic words, this operation comes handy when
@@ -877,10 +879,12 @@ fullMultiplier a@(SBV (KBounded _ w) _) b = (go w (bitVector w 0) a, bvMul a b)
                    in go (n-1) p'' x'
         shiftIn k v = (lsb v, bvOr mask (bvShRC v 1))
            where mask = ite k (bitVector w (bit (w - 1))) (bitVector w 0)
+fullMultiplier _ _ = error "cannot multiply unbounded values" 
 
 -- | Little-endian blasting of a word into its bits. Also see the 'FromBits' class.
 blastLE :: SIntegral a => SBV a -> [SBool]
 blastLE x@(SBV (KBounded _ k) _) = map (sbvTestBit x) [0 .. k - 1]
+blastLE _ = error "cannot blast unbounded values" 
 
 -- | Big-endian blasting of a word into its bits. Also see the 'FromBits' class.
 blastBE ::SIntegral a => SBV a -> [SBool]
@@ -893,6 +897,7 @@ lsb x = sbvTestBit x 0
 -- | Most significant bit of a word, always stored at the last position.
 msb :: SIntegral a => SBV a -> SBool
 msb x@(SBV (KBounded _ k) _) = sbvTestBit x (k - 1)
+msb _ = error "does an unbounded value have a highest bit?"
 
 -- Enum instance. These instances are suitable for use with concrete values,
 -- and will be less useful for symbolic values around. Note that `fromEnum` requires
@@ -1172,6 +1177,7 @@ class Mergeable a where
    select xs err ind@(SBV (KBounded _ k) _) = walk xs ind err
     where walk []     _ acc = acc
           walk (e:es) i acc = walk es (bvSub i (bitVector k 1)) (ite (bvEq i (bitVector k 0)) e acc)
+   select _ _ _ = error "cannot select with a potentially unbounded index"
    -- select xs err ind = walk xs ind err
    --  where walk []     _ acc = acc
    --        walk (e:es) i acc = walk es (i-1) (ite (i .== 0) e acc)
@@ -1811,6 +1817,7 @@ bvNeq = addArgs (/=) $ liftSym2B (mkSymOpSC (eqOpt falseSW) NotEqual) noCheck
 
 bvSetBit :: SIntegral a => SBV a -> Int -> SBV a
 bvSetBit a@(SBV (KBounded _ k) _) i = bvOr a (bitVector k (shiftL 1 i))
+bvSetBit _ _ = error "bvSetBit requires bounded value"
 
 bvAdd :: SIntegral a => SBV a -> SBV a -> SBV a
 bvAdd x y
@@ -1898,11 +1905,10 @@ bvOr x@(SBV (KBounded _ w) _) y
 bvOr _ _ = error "SWord must be bounded"
 
 bvXOr :: SIntegral a => SBV a -> SBV a -> SBV a 
-bvXOr x@(SBV (KBounded _ w) _) y
+bvXOr x y
   | x `valIs` (== 0) = y
   | y `valIs` (== 0) = x
   | True = addArgs xor (liftSym2 (mkSymOp XOr) noCheck) x y
-bvXOr _ _ = error "SBV a must be bounded"
 
 bvNot :: SIntegral a => SBV a -> SBV a
 bvNot = addArgs complement (liftSym1 (mkSymOp1 Not))
@@ -1975,12 +1981,14 @@ bvRotLC x@(SBV (KBounded _ sz) _) y
   | y < 0 = bvRotRC x (-y)
   | y == 0 = x
   | True = addArgs (rot True sz y) (liftSym1 (mkSymOp1 (Rol (y `mod` sz)))) x
+bvRotLC _ _ = error "cannot rotate unbounded value"
 
 bvRotRC :: SIntegral a => SBV a -> Int -> SBV a
 bvRotRC x@(SBV (KBounded _ sz) _) y
   | y < 0 = bvRotLC x (-y)
   | y == 0 = x
   | True = addArgs (rot False sz y) (liftSym1 (mkSymOp1 (Ror (y `mod` sz)))) x
+bvRotRC _ _ = error "cannot rotate unbounded value"  
 
 {-# ANN module "HLint: ignore Eta reduce"         #-}
 {-# ANN module "HLint: ignore Reduce duplication" #-}
