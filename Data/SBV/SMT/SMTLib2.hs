@@ -422,6 +422,9 @@ cvtExp rm skolemMap tableMap expr@(SBVApp _ arguments) = sh expr
            | i < 0  = sh (SBVApp (Shr (-i)) [a])  -- flip sign/direction
            | intOp  = "(* " ++ ssw a ++ " " ++ show (bit i :: Integer) ++ ")"  -- Implement shiftL by multiplication by 2^i
            | True   = bad
+        sh (SBVApp (SShr i) [a])
+           | bvOp  = shft rm ssw "bvashr" "bvashr" i a
+           | True  = bad
         sh (SBVApp (Shr i) [a])
            | bvOp  = shft rm ssw "bvlshr" "bvashr" i a
            | i < 0 = sh (SBVApp (Shl (-i)) [a])  -- flip sign/direction

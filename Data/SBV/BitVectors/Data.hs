@@ -240,7 +240,7 @@ data Op = Plus | Times | Minus
         | ArrRead Int
         | Uninterpreted String
         | SQuot | SRem | SGreaterThan | SLessThan | SLessEq | SGreaterEq
-        | SymShr | SymShl | SSymShr
+        | SymShr | SymShl | SShr Int | SSymShr
         deriving (Eq, Ord)
 
 -- | SMT-Lib's square-root over floats/doubles. We piggy back on to the uninterpreted function mechanism

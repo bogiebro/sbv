@@ -38,7 +38,7 @@ module Data.SBV.BitVectors.Model (
   bvAnd, bvOr, bvXOr, bvNot, 
   bvShL, bvShR, bvSShR, bvShRC, bvShLC,
   bvUDiv, bvURem, bvSDiv, bvSRem, bvJoin,
-  bvRotRC, bvRotLC, bvLength
+  bvRotRC, bvRotLC, bvLength, bvSShRC
   ) where
 
 import Data.IORef
@@ -1924,6 +1924,12 @@ bvShRC x y
   | y == 0 = x
   | y < 0 = bvShLC x (-y)
   | True = addArgs (flip shiftR y) (liftSym1 (mkSymOp1 (Shr y))) x
+
+bvSShRC :: SIntegral a => SBV a -> Int -> SBV a
+bvSShRC x@(SBV (KBounded _ w) _) y
+  | y == 0 = x
+  | y < 0 = bvShLC x (-y)
+  | True = addArgs (\a-> bit w .|. shiftR a y) (liftSym1 (mkSymOp1 (SShr y))) x
 
 bvShL :: SIntegral a => SBV a -> SBV a -> SBV a
 bvShL x y

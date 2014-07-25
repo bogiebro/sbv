@@ -6,7 +6,7 @@ module Data.SBV.LowLevel (
   bvAnd, bvOr, bvXOr, bvNot, bvLength,
   bvShL, bvShR, bvSShR, bvShRC, bvShLC,
   bvUDiv, bvURem, bvSDiv, bvSRem, bvJoin,
-  Quantifier(..), bvRotLC, bvRotRC
+  Quantifier(..), bvRotLC, bvRotRC, bvSShRC
   ) where
 
 import Data.SBV.BitVectors.Model
